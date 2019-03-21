@@ -1,0 +1,4 @@
+#!/bin/bash
+
+neper -T -n 8 -dim 2 -morpho graingrowth -format tesr -tesrsize 101 \
+      -tesrformat ascii -periodicity 1 -o RVE
