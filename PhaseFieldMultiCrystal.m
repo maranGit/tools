@@ -8,6 +8,8 @@
 % crystal simulations. Computer Methods in Applied Mechanics and Engineering,
 % 338, 657-691.
 %
+% update 12/6/2019: reduce to 1 phase field for fracture
+%
 classdef PhaseFieldMultiCrystal < handle
     properties
         % Input parameters
@@ -115,55 +117,20 @@ classdef PhaseFieldMultiCrystal < handle
         pf_eq;
         slip_crit;
         degrade_0;
-        degrade_1;
-        degrade_2;
-        degrade_3;
-        degrade_4;
-        degrade_5;
-        
-        degrade_deriv;
-        degrade_deriv_2;
         
         degrade_0_deriv;
-        degrade_1_deriv;
-        degrade_2_deriv;
-        degrade_3_deriv;
-        degrade_4_deriv;
-        degrade_5_deriv;
         degrade_0_deriv_2;
-        degrade_1_deriv_2;
-        degrade_2_deriv_2;
-        degrade_3_deriv_2;
-        degrade_4_deriv_2;
-        degrade_5_deriv_2;
         
         % Strain energy
         H_plus_updated; % bool
-        new_H_plus;
-        old_H_plus;
         
         new_H_plus_0;
         old_H_plus_0;
-        new_H_plus_1;
-        old_H_plus_1;
-        new_H_plus_2;
-        old_H_plus_2;
-        new_H_plus_3;
-        old_H_plus_3;
-        new_H_plus_4;
-        old_H_plus_4;
-        new_H_plus_5;
-        old_H_plus_5;
         
         H_plastic;
         
         % Structure tensors
         omega_0; % SymmetricTensor<2,3>
-        omega_1; % SymmetricTensor<2,3>
-        omega_2; % SymmetricTensor<2,3>
-        omega_3; % SymmetricTensor<2,3>
-        omega_4; % SymmetricTensor<2,3>
-        omega_5; % SymmetricTensor<2,3>
         
         % constants
         tol = 1.0e-9;
@@ -212,33 +179,9 @@ classdef PhaseFieldMultiCrystal < handle
             obj.new_tau                  = obj.tau_ini;
             obj.new_active_set = zeros(2 * obj.num_slip_system + 1, 1);
             
-            obj.new_H_plus      = 0;
-            obj.degrade         = 0;
-            obj.degrade_deriv   = 0;
-            
             obj.new_H_plus_0    = 0;
             obj.degrade_0       = 0;
             obj.degrade_0_deriv = 0;
-            
-            obj.new_H_plus_1    = 0;
-            obj.degrade_1       = 0;
-            obj.degrade_1_deriv = 0;
-            
-            obj.new_H_plus_2    = 0;
-            obj.degrade_2       = 0;
-            obj.degrade_2_deriv = 0;
-            
-            obj.new_H_plus_3    = 0;
-            obj.degrade_3       = 0;
-            obj.degrade_3_deriv = 0;
-            
-            obj.new_H_plus_4    = 0;
-            obj.degrade_4       = 0;
-            obj.degrade_4_deriv = 0;
-            
-            obj.new_H_plus_5    = 0;
-            obj.degrade_5       = 0;
-            obj.degrade_5_deriv = 0;
             
             obj.H_plastic       = 0;
             
@@ -258,11 +201,6 @@ classdef PhaseFieldMultiCrystal < handle
             obj.old_plastic_strain = zeros(6,1);
             obj.new_cto = obj.elastic_cto;
             obj.omega_0 = zeros(6,1);
-            obj.omega_1 = zeros(6,1);
-            obj.omega_2 = zeros(6,1);
-            obj.omega_3 = zeros(6,1);
-            obj.omega_4 = zeros(6,1);
-            obj.omega_5 = zeros(6,1);
             
             obj.update_slip_plane();
             obj.save_state();
@@ -291,31 +229,13 @@ classdef PhaseFieldMultiCrystal < handle
             obj.dt = pass_time;
         end
         
-        function update_phasefield(obj, pf_0, pf_1, pf_2, pf_3, pf_4, pf_5)
+        function update_phasefield(obj, pf_0)
             obj.degrade_0 = (1-pf_0)*(1-pf_0);
-            obj.degrade_1 = (1-pf_1)*(1-pf_1);
-            obj.degrade_2 = (1-pf_2)*(1-pf_2);
-            obj.degrade_3 = (1-pf_3)*(1-pf_3);
-            obj.degrade_4 = (1-pf_4)*(1-pf_4);
-            obj.degrade_5 = (1-pf_5)*(1-pf_5);
-            obj.degrade   = (1 - obj.kappa_reg) * obj.degrade_0...
-                *obj.degrade_1*obj.degrade_2*obj.degrade_3*obj.degrade_4...
-                *obj.degrade_5 + obj.kappa_reg;
+            obj.degrade   = (1 - obj.kappa_reg) * obj.degrade_0 + obj.kappa_reg;
             
             obj.degrade_0_deriv   = -2*(1-pf_0);
-            obj.degrade_1_deriv   = -2*(1-pf_1);
-            obj.degrade_2_deriv   = -2*(1-pf_2);
-            obj.degrade_3_deriv   = -2*(1-pf_3);
-            obj.degrade_4_deriv   = -2*(1-pf_4);
-            obj.degrade_5_deriv   = -2*(1-pf_5);
             
             obj.degrade_0_deriv_2 = 2;
-            obj.degrade_1_deriv_2 = 2;
-            obj.degrade_2_deriv_2 = 2;
-            obj.degrade_3_deriv_2 = 2;
-            obj.degrade_4_deriv_2 = 2;
-            obj.degrade_5_deriv_2 = 2;
-            obj.degrade_deriv_2 = 2;
             
             % Update anisotropic plane
             obj.update_slip_plane();
@@ -344,11 +264,6 @@ classdef PhaseFieldMultiCrystal < handle
             
             I2 = [1; 1; 1; 0; 0; 0];
             obj.omega_0 = I2 + aniso*(I2 - A(:,1));
-            obj.omega_1 = I2 + aniso*(I2 - A(:,2));
-            obj.omega_2 = I2 + aniso*(I2 - A(:,3));
-            obj.omega_3 = I2 + aniso*(I2 - A(:,4));
-            obj.omega_4 = I2 + aniso*(I2 - A(:,5));
-            obj.omega_5 = I2 + aniso*(I2 - A(:,6));
         end
         
         function update_strain_energy(obj)
@@ -390,63 +305,14 @@ classdef PhaseFieldMultiCrystal < handle
             
             obj.H_plastic = plastic_energy;
             
-            if strain_energy_plus > obj.old_H_plus
-                obj.new_H_plus = strain_energy_plus;
-            else
-                obj.new_H_plus = obj.old_H_plus;
-            end
-            
             reg = 1 - obj.kappa_reg;
             
             % Update H plus for multiphase
-            d0 = obj.degrade_0;
-            d1 = obj.degrade_1;
-            d2 = obj.degrade_2;
-            d3 = obj.degrade_3;
-            d4 = obj.degrade_4;
-            d5 = obj.degrade_5;
-            
-            dd = d1*d2*d3*d4*d5;
             strain_energy = strain_energy_plus+plastic_energy;
-            if reg*dd*strain_energy > obj.old_H_plus_0
-                obj.new_H_plus_0 = reg*dd*strain_energy;
+            if reg*strain_energy > obj.old_H_plus_0
+                obj.new_H_plus_0 = reg*strain_energy;
             else
                 obj.new_H_plus_0 = obj.old_H_plus_0;
-            end
-            
-            dd = d0*d2*d3*d4*d5;
-            if reg*dd*strain_energy > obj.old_H_plus_1
-                obj.new_H_plus_1 = reg*dd*strain_energy;
-            else
-                obj.new_H_plus_1 = obj.old_H_plus_1;
-            end
-            
-            dd = d0*d1*d3*d4*d5;
-            if reg*dd*strain_energy > obj.old_H_plus_2
-                obj.new_H_plus_2 = reg*dd*strain_energy;
-            else
-                obj.new_H_plus_2 = obj.old_H_plus_2;
-            end
-            
-            dd = d0*d1*d2*d4*d5;
-            if reg*dd*strain_energy > obj.old_H_plus_3
-                obj.new_H_plus_3 = reg*dd*strain_energy;
-            else
-                obj.new_H_plus_3 = obj.old_H_plus_3;
-            end
-            
-            dd = d0*d1*d2*d3*d5;
-            if reg*dd*strain_energy > obj.old_H_plus_4
-                obj.new_H_plus_4 = reg*dd*strain_energy;
-            else
-                obj.new_H_plus_4 = obj.old_H_plus_4;
-            end
-            
-            dd = d0*d1*d2*d3*d4;
-            if reg*dd*strain_energy > obj.old_H_plus_5
-                obj.new_H_plus_5 = reg*dd*strain_energy;
-            else
-                obj.new_H_plus_5 = obj.old_H_plus_5;
             end
             
             %  new_cto = degrade*(K*eye_dyad_eye + 2*mu*(big_eye - one_third*eye_dyad_eye)) + K*eye_dyad_eye;
@@ -483,13 +349,7 @@ classdef PhaseFieldMultiCrystal < handle
             obj.old_plastic_slip_4       = obj.new_plastic_slip_4;
             obj.old_plastic_slip_5       = obj.new_plastic_slip_5;
             % Driving force
-            obj.old_H_plus               = obj.new_H_plus;
             obj.old_H_plus_0             = obj.new_H_plus_0;
-            obj.old_H_plus_1             = obj.new_H_plus_1;
-            obj.old_H_plus_2             = obj.new_H_plus_2;
-            obj.old_H_plus_3             = obj.new_H_plus_3;
-            obj.old_H_plus_4             = obj.new_H_plus_4;
-            obj.old_H_plus_5             = obj.new_H_plus_5;
         end
         
         function recover_state(obj)
@@ -520,13 +380,7 @@ classdef PhaseFieldMultiCrystal < handle
             obj.old_plastic_slip_4       = obj.old_old_plastic_slip_4;
             obj.old_plastic_slip_5       = obj.old_old_plastic_slip_5;
             % Driving force
-            obj.new_H_plus               = obj.old_H_plus;
             obj.new_H_plus_0             = obj.old_H_plus_0;
-            obj.new_H_plus_1             = obj.old_H_plus_1;
-            obj.new_H_plus_2             = obj.old_H_plus_2;
-            obj.new_H_plus_3             = obj.old_H_plus_3;
-            obj.new_H_plus_4             = obj.old_H_plus_4;
-            obj.new_H_plus_5             = obj.old_H_plus_5;
         end
         
         function sigma = stress(obj)
@@ -627,34 +481,6 @@ classdef PhaseFieldMultiCrystal < handle
             temp = obj.omega_0;
         end
         
-        function temp = anisotropy_omega_1(obj)
-            temp = obj.omega_1;
-        end
-        
-        function temp = anisotropy_omega_2(obj)
-            temp = obj.omega_2;
-        end
-        
-        function temp = anisotropy_omega_3(obj)
-            temp = obj.omega_3;
-        end
-        
-        function temp = anisotropy_omega_4(obj)
-            temp = obj.omega_4;
-        end
-        
-        function temp = anisotropy_omega_5(obj)
-            temp = obj.omega_5;
-        end
-        
-        function temp = crack_driving_force(obj)
-            temp = obj.degrade_deriv * obj.new_H_plus;
-        end
-        
-        function temp = crack_driving_force_deriv(obj)
-            temp = obj.degrade_deriv_2*obj.new_H_plus;
-        end
-        
         function temp = crack_driving_force_0(obj)
             temp = obj.degrade_0_deriv*obj.new_H_plus_0;
         end
@@ -663,76 +489,12 @@ classdef PhaseFieldMultiCrystal < handle
             temp = obj.degrade_0_deriv_2*obj.new_H_plus_0;
         end
         
-        function temp = crack_driving_force_1(obj)
-            temp = obj.degrade_1_deriv*obj.new_H_plus_1;
-        end
-        
-        function temp = crack_driving_force_deriv_1(obj)
-            temp = obj.degrade_1_deriv_2*obj.new_H_plus_1;
-        end
-        
-        function temp = crack_driving_force_2(obj)
-            temp = obj.degrade_2_deriv*obj.new_H_plus_2;
-        end
-        
-        function temp = crack_driving_force_deriv_2(obj)
-            temp = obj.degrade_2_deriv_2*obj.new_H_plus_2;
-        end
-        
-        function temp = crack_driving_force_3(obj)
-            temp = obj.degrade_3_deriv*obj.new_H_plus_3;
-        end
-        
-        function temp = crack_driving_force_deriv_3(obj)
-            temp = obj.degrade_3_deriv_2*obj.new_H_plus_3;
-        end
-        
-        function temp = crack_driving_force_4(obj)
-            temp = obj.degrade_4_deriv*obj.new_H_plus_4;
-        end
-        
-        function temp = crack_driving_force_deriv_4(obj)
-            temp = obj.degrade_4_deriv_2*obj.new_H_plus_4;
-        end
-        
-        function temp = crack_driving_force_5(obj)
-            temp = obj.degrade_5_deriv*obj.new_H_plus_5;
-        end
-        
-        function temp = crack_driving_force_deriv_5(obj)
-            temp = obj.degrade_5_deriv_2*obj.new_H_plus_5;
-        end
-        
-        function temp = strain_energy_plus(obj)
-            temp = obj.new_H_plus;
-        end
-        
         function temp = plastic_strain_energy(obj)
             temp = obj.H_plastic;
         end
         
         function temp = update_H_plus_0(obj)
             temp = obj.new_H_plus_0;
-        end
-        
-        function temp = update_H_plus_1(obj)
-            temp = obj.new_H_plus_1;
-        end
-        
-        function temp = update_H_plus_2(obj)
-            temp = obj.new_H_plus_2;
-        end
-        
-        function temp = update_H_plus_3(obj)
-            temp = obj.new_H_plus_3;
-        end
-        
-        function temp = update_H_plus_4(obj)
-            temp = obj.new_H_plus_4;
-        end
-        
-        function temp = update_H_plus_5(obj)
-            temp = obj.new_H_plus_5;
         end
         
         % Energy dissipation
