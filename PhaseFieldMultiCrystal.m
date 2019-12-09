@@ -9,15 +9,13 @@
 % 338, 657-691.
 %
 % update 12/6/2019: reduce to 1 phase field for fracture
+% update 12/9/2019: update to my phase field fracture formulation
 %
 classdef PhaseFieldMultiCrystal < handle
     properties
         % Input parameters
         K;
         nu;
-        G_c;
-        l_c;
-        S_c;
         tau_ini;
         hardening;
         prm_Q;    % Activation energy
@@ -25,7 +23,6 @@ classdef PhaseFieldMultiCrystal < handle
         exponent; % Power-law parameter
         Euler_Theta;
         Euler_Phi;
-        aniso_factor;
         verbose = 0; % bool
         
         % Computed Parameters
@@ -38,8 +35,6 @@ classdef PhaseFieldMultiCrystal < handle
         %   Temperature, time increment
         temperature;
         dt;
-        
-        kappa_reg;
         
         % Stresses, Strains, Moduli
         new_stress; % SymmetricTensor<2,3>
@@ -112,25 +107,15 @@ classdef PhaseFieldMultiCrystal < handle
         new_tau;
         old_tau;
         
-        % Degradation
-        degrade;
-        pf_eq;
-        slip_crit;
-        degrade_0;
-        
-        degrade_0_deriv;
-        degrade_0_deriv_2;
-        
-        % Strain energy
-        H_plus_updated; % bool
-        
-        new_H_plus_0;
-        old_H_plus_0;
-        
-        H_plastic;
-        
-        % Structure tensors
-        omega_0; % SymmetricTensor<2,3>
+        % new phase field variables
+        Gc_c;
+        l0_c;
+        k_c;
+        Hn_c;
+        Hn1_c;
+        g_c;
+        gp_c;
+        gpp_c;
         
         % constants
         tol = 1.0e-9;
@@ -143,8 +128,6 @@ classdef PhaseFieldMultiCrystal < handle
             % Parse Parameters
             obj.K = 25; % bulk modulus
             obj.nu = 0.25; % poisson ratio
-            obj.G_c = 1.15e-6;
-            obj.l_c = 0.02;
             obj.tau_ini = 5.0e-3; % critical resolved shear stress
             obj.hardening = 0.1; % hardening parameter
             obj.prm_Q = 14; % activation energy
@@ -152,8 +135,6 @@ classdef PhaseFieldMultiCrystal < handle
             obj.exponent = 10.0;
             obj.Euler_Theta = 10.0 * pi / 180;
             obj.Euler_Phi = 30.0 * pi / 180;
-            obj.aniso_factor = 40;
-            obj.S_c = 0;
             obj.verbose = 0;
             
             % Elastic Tangent Operator
@@ -179,16 +160,15 @@ classdef PhaseFieldMultiCrystal < handle
             obj.new_tau                  = obj.tau_ini;
             obj.new_active_set = zeros(2 * obj.num_slip_system + 1, 1);
             
-            obj.degrade         = 0;
-            obj.new_H_plus_0    = 0;
-            obj.degrade_0       = 0;
-            obj.degrade_0_deriv = 0;
-            
-            obj.H_plastic       = 0;
-            
-            obj.kappa_reg       = 1e-3;
-            
-            % End
+            % phase field fracture initialization
+            obj.Gc_c  = 1.15e-6;
+            obj.l0_c  = 0.02;
+            obj.k_c   = 1e-3;
+            obj.Hn_c  = 0;
+            obj.Hn1_c = 0;
+            obj.g_c   = 0;
+            obj.gp_c  = 0;
+            obj.gpp_c = 0;
             
             % extra initiation for tensor variables
             obj.new_stress = zeros(6,1);
@@ -201,7 +181,6 @@ classdef PhaseFieldMultiCrystal < handle
             obj.new_plastic_strain = zeros(6,1);
             obj.old_plastic_strain = zeros(6,1);
             obj.new_cto = obj.elastic_cto;
-            obj.omega_0 = zeros(6,1);
             
             obj.update_slip_plane();
             obj.save_state();
@@ -230,21 +209,18 @@ classdef PhaseFieldMultiCrystal < handle
             obj.dt = pass_time;
         end
         
-        function update_phasefield(obj, pf_0)
-            obj.degrade_0 = (1-pf_0)*(1-pf_0);
-            obj.degrade   = (1 - obj.kappa_reg) * obj.degrade_0 + obj.kappa_reg;
-            
-            obj.degrade_0_deriv   = -2*(1-pf_0);
-            
-            obj.degrade_0_deriv_2 = 2;
-            
-            % Update anisotropic plane
-            obj.update_slip_plane();
+        function update_phasefield(obj, pfc)
+            one       = 1.0e0;
+            two       = 2.0e0;
+            onemk     = 1 - obj.k_c;
+            obj.g_c   = onemk * (1-pfc) * (1-pfc) + obj.k_c;
+            obj.g_c   = onemk * (one - pfc) * (one - pfc) + obj.k_c;
+            obj.gp_c  = two * onemk * (pfc - one);
+            obj.gpp_c = two * onemk;
         end
         
         function update_slip_plane(obj)
             % Slip plane
-            aniso = obj.aniso_factor;
             A = zeros (6, obj.num_slip_system); % for elasticity
             
             rotation_matrix = obj.update_R_matrix();
@@ -262,9 +238,6 @@ classdef PhaseFieldMultiCrystal < handle
                 A(5,i) = 0.5 * ( A_temp(1,3) + A_temp(3,1) );
                 A(6,i) = 0.5 * ( A_temp(2,3) + A_temp(3,2) );
             end
-            
-            I2 = [1; 1; 1; 0; 0; 0];
-            obj.omega_0 = I2 + aniso*(I2 - A(:,1));
         end
         
         function update_strain_energy(obj)
@@ -285,13 +258,10 @@ classdef PhaseFieldMultiCrystal < handle
             
             dev_starin = obj.new_elastic_strain - one_third*tr_eps*I2;
             
-            %  new_stress_plus = 0.5*K* tr_eps_plus*eye + 2*mu*dev_starin;
-            %  new_stress_minus = 0.5*K* tr_eps_minus*eye;
-            %  Ran: bug?
             new_stress_plus = obj.K* tr_eps_plus*I2 + 2*obj.mu*I4*dev_starin;
             new_stress_minus = obj.K* tr_eps_minus*I2;
             
-            obj.new_stress = obj.degrade*new_stress_plus + new_stress_minus;
+            obj.new_stress = obj.g_c * new_stress_plus + new_stress_minus;
             
             % Update strain history variable
             strain_energy_plus = 0.5*obj.K*tr_eps_plus*tr_eps_plus...
@@ -304,22 +274,15 @@ classdef PhaseFieldMultiCrystal < handle
                 + obj.new_plastic_slip_4 * obj.new_plastic_slip_4 ...
                 + obj.new_plastic_slip_5 * obj.new_plastic_slip_5);
             
-            obj.H_plastic = plastic_energy;
-            
-            reg = 1 - obj.kappa_reg;
-            
             % Update H plus for multiphase
             strain_energy = strain_energy_plus+plastic_energy;
-            if reg*strain_energy > obj.old_H_plus_0
-                obj.new_H_plus_0 = reg*strain_energy;
+            if strain_energy > obj.Hn_c
+                obj.Hn1_c = strain_energy;
             else
-                obj.new_H_plus_0 = obj.old_H_plus_0;
+                obj.Hn1_c = obj.Hn_c;
             end
             
-            %  new_cto = degrade*(K*eye_dyad_eye + 2*mu*(big_eye - one_third*eye_dyad_eye)) + K*eye_dyad_eye;
-            % Ran: bug?
-            % obj.new_cto = obj.degrade * ( obj.K * I2I2 + 2 * obj.mu * (I4 - one_third*I2I2) );
-            obj.new_cto = obj.degrade * obj.new_cto;
+            obj.new_cto = obj.g_c * obj.new_cto;
         end
         
         function save_state(obj)
@@ -350,7 +313,7 @@ classdef PhaseFieldMultiCrystal < handle
             obj.old_plastic_slip_4       = obj.new_plastic_slip_4;
             obj.old_plastic_slip_5       = obj.new_plastic_slip_5;
             % Driving force
-            obj.old_H_plus_0             = obj.new_H_plus_0;
+            obj.Hn_c                     = obj.Hn1_c;
         end
         
         function recover_state(obj)
@@ -381,7 +344,7 @@ classdef PhaseFieldMultiCrystal < handle
             obj.old_plastic_slip_4       = obj.old_old_plastic_slip_4;
             obj.old_plastic_slip_5       = obj.old_old_plastic_slip_5;
             % Driving force
-            obj.new_H_plus_0             = obj.old_H_plus_0;
+            obj.Hn1_c                    = obj.Hn_c;
         end
         
         function sigma = stress(obj)
@@ -438,12 +401,12 @@ classdef PhaseFieldMultiCrystal < handle
             shm = obj.mu;
         end
         
-        function fren = fracture_energy(obj)
-            fren = obj.G_c;
+        function fren = get_Gc_c(obj)
+            fren = obj.Gc_c;
         end
         
-        function lgsc = length_scale(obj)
-            lgsc = obj.l_c;
+        function lgsc = get_l0_c(obj)
+            lgsc = obj.l0_c;
         end
         
         function psn = plastic_slip_new(obj)
@@ -476,26 +439,6 @@ classdef PhaseFieldMultiCrystal < handle
         
         function plsl = plastic_slip_new_5(obj)
             plsl = obj.new_plastic_slip_5;
-        end
-        
-        function temp = anisotropy_omega_0(obj)
-            temp = obj.omega_0;
-        end
-        
-        function temp = crack_driving_force_0(obj)
-            temp = obj.degrade_0_deriv*obj.new_H_plus_0;
-        end
-        
-        function temp = crack_driving_force_deriv_0(obj)
-            temp = obj.degrade_0_deriv_2*obj.new_H_plus_0;
-        end
-        
-        function temp = plastic_strain_energy(obj)
-            temp = obj.H_plastic;
-        end
-        
-        function temp = update_H_plus_0(obj)
-            temp = obj.new_H_plus_0;
         end
         
         % Energy dissipation
@@ -550,9 +493,6 @@ classdef PhaseFieldMultiCrystal < handle
             obj.new_tau                  = obj.old_tau;
             obj.new_active_set           = obj.old_active_set;
             
-            %double exponent = 3.26;
-            %double prm_C    = 3.16e+8;  % Fitting parameter (s^-1)
-            %double prm_Q    = 12.0;     % Activation energy (kcal/mol)
             prm_R    = 1.986e-3; % Gas constant (kcal/(mol.K))
             obj.viscosity = 1.0/(obj.prm_C*exp((-1.0)*obj.prm_Q/(prm_R*obj.temperature)));
             
