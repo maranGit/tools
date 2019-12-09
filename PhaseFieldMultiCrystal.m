@@ -10,6 +10,7 @@
 %
 % update 12/6/2019: reduce to 1 phase field for fracture
 % update 12/9/2019: update to my phase field fracture formulation
+% update 12/9/2019: twinning phase field
 %
 classdef PhaseFieldMultiCrystal < handle
     properties
@@ -21,8 +22,11 @@ classdef PhaseFieldMultiCrystal < handle
         prm_Q;    % Activation energy
         prm_C;    % Fitting parameter
         exponent; % Power-law parameter
-        Euler_Theta;
-        Euler_Phi;
+%         Euler_Theta;
+%         Euler_Phi;
+        Euler_phi1;
+        Euler_phi;
+        Euler_phi2;
         verbose = 0; % bool
         
         % Computed Parameters
@@ -107,7 +111,7 @@ classdef PhaseFieldMultiCrystal < handle
         new_tau;
         old_tau;
         
-        % new phase field variables
+        % phase field fracture
         Gc_c;
         l0_c;
         k_c;
@@ -117,9 +121,26 @@ classdef PhaseFieldMultiCrystal < handle
         gp_c;
         gpp_c;
         
+        % phase field twinning
+        alpha_t; % constant in representative function
+        gamma0_t; % magnitude of twinning shear
+        Gc_t; % twin boundary energy
+        l0_t; % equilibrium boundary thickness
+        A_t; % double-well energy parameter
+        k_t; % gradient energy parameter
+        phi_t; % representative function
+        phip_t; % 1st order derivative of representative function
+        phipp_t; % 2nd order derivative of representative function
+        sm_t; % twinning strain mode
+        strain_twin; % twinning strain
+        tau_t; % shear stress on the twinning plane
+        svec_t = [1; 0; 0];
+        mvec_t = [0; 1; 0];
+        
         % constants
         tol = 1.0e-9;
     end
+    
     methods
         function obj = PhaseFieldMultiCrystal()
         end
@@ -133,8 +154,11 @@ classdef PhaseFieldMultiCrystal < handle
             obj.prm_Q = 14; % activation energy
             obj.prm_C = 1.0; % shape factor
             obj.exponent = 10.0;
-            obj.Euler_Theta = 10.0 * pi / 180;
-            obj.Euler_Phi = 30.0 * pi / 180;
+%             obj.Euler_Theta = 10.0 * pi / 180;
+%             obj.Euler_Phi = 30.0 * pi / 180;
+            obj.Euler_phi1 = 30.0 * pi / 180;
+            obj.Euler_phi  = 50.0 * pi / 180;
+            obj.Euler_phi2 = 10.0 * pi / 180;
             obj.verbose = 0;
             
             % Elastic Tangent Operator
@@ -160,7 +184,7 @@ classdef PhaseFieldMultiCrystal < handle
             obj.new_tau                  = obj.tau_ini;
             obj.new_active_set = zeros(2 * obj.num_slip_system + 1, 1);
             
-            % phase field fracture initialization
+            % phase field fracture
             obj.Gc_c  = 1.15e-6;
             obj.l0_c  = 0.02;
             obj.k_c   = 1e-3;
@@ -169,6 +193,19 @@ classdef PhaseFieldMultiCrystal < handle
             obj.g_c   = 0;
             obj.gp_c  = 0;
             obj.gpp_c = 0;
+            
+            % phase field twinning
+            obj.Gc_t        = 1.17e-4; % mJ/(mm^2)
+            obj.l0_t        = 1.0e-6;  % mm
+            obj.alpha_t     = 3;
+            obj.gamma0_t    = 0.1295;
+            obj.A_t         = 12 * obj.Gc_t / obj.l0_t;
+            obj.k_t         = 0.75 * obj.Gc_t * obj.l0_t;
+            obj.phi_t       = 0;
+            obj.phip_t      = 0;
+            obj.phipp_t     = 0;
+            obj.sm_t        = zeros(6,1);
+            obj.strain_twin = zeros(6,1);
             
             % extra initiation for tensor variables
             obj.new_stress = zeros(6,1);
@@ -198,9 +235,11 @@ classdef PhaseFieldMultiCrystal < handle
                 incr_strain_2d(1) = incr_strain(1);
                 incr_strain_2d(2) = incr_strain(2);
                 incr_strain_2d(4) = incr_strain(3);
-                obj.run_3D_update(incr_strain_2d);
+                strain_n1 = obj.old_strain + incr_strain_2d;
+                obj.run_3D_update(strain_n1);
             else
-                obj.run_3D_update(incr_strain);
+                strain_n1 = obj.old_strain + incr_strain;
+                obj.run_3D_update(strain_n1);
             end
         end
         
@@ -209,14 +248,31 @@ classdef PhaseFieldMultiCrystal < handle
             obj.dt = pass_time;
         end
         
-        function update_phasefield(obj, pfc)
+        function update_phasefield(obj, pft, pfc)
+            % fracture
             one       = 1.0e0;
             two       = 2.0e0;
+            three     = 3.0e0;
+            four      = 4.0e0;
+            six       = 6.0e0;
+            twelve    = 12.0e0;
             onemk     = 1 - obj.k_c;
             obj.g_c   = onemk * (1-pfc) * (1-pfc) + obj.k_c;
             obj.g_c   = onemk * (one - pfc) * (one - pfc) + obj.k_c;
             obj.gp_c  = two * onemk * (pfc - one);
             obj.gpp_c = two * onemk;
+            
+            % twinning
+            a1 = obj.alpha_t;
+            a2 = two - a1;
+            a3 = a1 - three;
+            pft2 = pft * pft;
+            pft3 = pft * pft2;
+            pft4 = pft * pft3;
+            obj.phi_t   = a1*pft2 + two*a2*pft3 + a3*pft4;
+            obj.phip_t  = two*a1*pft + six*a2*pft2 + four*a3*pft3;
+            obj.phipp_t = two*a1 + twelve*a2*pft + twelve*a3*pft2;
+            obj.strain_twin = obj.gamma0_t * obj.phi_t * obj.sm_t;
         end
         
         function update_slip_plane(obj)
@@ -238,6 +294,18 @@ classdef PhaseFieldMultiCrystal < handle
                 A(5,i) = 0.5 * ( A_temp(1,3) + A_temp(3,1) );
                 A(6,i) = 0.5 * ( A_temp(2,3) + A_temp(3,2) );
             end
+            
+            % update twinning plane
+            svec = obj.svec_t;
+            mvec = obj.mvec_t;
+            svec = rotation_matrix * svec;
+            mvec = rotation_matrix * mvec;
+            sm   = zeros(6,1);
+            sm(1:3) = svec .* mvec;
+            sm(4)   = svec(1)*mvec(2) + svec(2)*mvec(1);
+            sm(5)   = svec(1)*mvec(3) + svec(3)*mvec(1);
+            sm(6)   = svec(2)*mvec(3) + svec(3)*mvec(2);
+            obj.sm_t = sm;
         end
         
         function update_strain_energy(obj)
@@ -262,6 +330,9 @@ classdef PhaseFieldMultiCrystal < handle
             new_stress_minus = obj.K* tr_eps_minus*I2;
             
             obj.new_stress = obj.g_c * new_stress_plus + new_stress_minus;
+            
+            % shear stress on twinning plane
+            obj.tau_t = transpose(obj.new_stress) * obj.sm_t;
             
             % Update strain history variable
             strain_energy_plus = 0.5*obj.K*tr_eps_plus*tr_eps_plus...
@@ -401,14 +472,6 @@ classdef PhaseFieldMultiCrystal < handle
             shm = obj.mu;
         end
         
-        function fren = get_Gc_c(obj)
-            fren = obj.Gc_c;
-        end
-        
-        function lgsc = get_l0_c(obj)
-            lgsc = obj.l0_c;
-        end
-        
         function psn = plastic_slip_new(obj)
             psn = obj.new_plastic_slip;
         end
@@ -476,9 +539,10 @@ classdef PhaseFieldMultiCrystal < handle
         end
         
         % Update
-        function run_3D_update(obj,incr_strain)
+        function run_3D_update(obj,strain_n1)
             % Compute a trial state in which the increment is assumed to be fully elastic
-            obj.new_elastic_strain       = obj.old_elastic_strain + incr_strain;
+%             obj.new_elastic_strain       = obj.old_elastic_strain + incr_strain;
+            obj.new_elastic_strain       = strain_n1 - obj.old_plastic_strain - obj.strain_twin;
             obj.new_cto                  = obj.elastic_cto;
             obj.new_stress               = obj.new_cto*obj.new_elastic_strain;
             obj.new_plastic_strain       = obj.old_plastic_strain;
@@ -537,7 +601,8 @@ classdef PhaseFieldMultiCrystal < handle
             % If size of trial_active_Set = 0, then Elastic response %
             %                                                        %
             if (trial_active_set(n21) < 1)                          %
-                obj.new_strain = obj.new_elastic_strain + obj.new_plastic_strain;   %
+%                 obj.new_strain = obj.new_elastic_strain + obj.new_plastic_strain;   %
+                obj.new_strain = strain_n1;   %
                 %new_active_set.resize(0);                             %
                 obj.update_strain_energy();                                 %
                 return;                                                 %
@@ -771,43 +836,145 @@ classdef PhaseFieldMultiCrystal < handle
             tmp_plastic_strain(4:6) = tmp_plastic_strain(4:6) * sqrt(0.5);
             obj.new_equiv_plastic_strain = obj.old_equiv_plastic_strain ...
                 + sqrt( 2 / 3 ) * norm(tmp_plastic_strain);
-            obj.new_strain = obj.new_elastic_strain + obj.new_plastic_strain;
+%             obj.new_strain = obj.new_elastic_strain + obj.new_plastic_strain;
+            obj.new_strain = strain_n1;
             obj.update_strain_energy();
         end
         
         function euler_matrix = update_R_matrix(obj)
-            % construct rotation matrix
-            cos_theta = cos(obj.Euler_Theta);
-            sin_theta = -sin(obj.Euler_Theta);
-            cos_phi = cos(obj.Euler_Phi);
-            sin_phi = -sin(obj.Euler_Phi);
+            % Note: R matrix here is different from the one from MTEX
+            % In fact, R = transpose(R_mtex)
+            % Reason: https://mtex-toolbox.github.io/MTEXvsBungeConvention.html
+            cos_phi1 = cos(obj.Euler_phi1);
+            sin_phi1 = sin(obj.Euler_phi1);
+            cos_phi  = cos(obj.Euler_phi);
+            sin_phi  = sin(obj.Euler_phi);
+            cos_phi2 = cos(obj.Euler_phi2);
+            sin_phi2 = sin(obj.Euler_phi2);
             
-            theta_matrix = zeros(3,3);
-            phi_matrix = zeros(3,3);
+            phi1_matrix = zeros(3);
+            phi_matrix  = zeros(3);
+            phi2_matrix = zeros(3);
             
             % Assign each element (Miehe and Schroder, 2001)
-            theta_matrix(1,1) = cos_theta;
-            theta_matrix(1,2) = 0.0;
-            theta_matrix(1,3) = -sin_theta;
-            theta_matrix(2,1) = 0.0;
-            theta_matrix(2,2) = 1.0;
-            theta_matrix(2,3) = 0.0;
-            theta_matrix(3,1) = sin_theta;
-            theta_matrix(3,2) = 0.0;
-            theta_matrix(3,3) = cos_theta;
+            % rotation w.r.t. z axis
+            phi1_matrix(1,1) = cos_phi1;
+            phi1_matrix(1,2) = sin_phi1;
+            phi1_matrix(1,3) = 0.0;
+            phi1_matrix(2,1) = -sin_phi1;
+            phi1_matrix(2,2) = cos_phi1;
+            phi1_matrix(2,3) = 0.0;
+            phi1_matrix(3,1) = 0.0;
+            phi1_matrix(3,2) = 0.0;
+            phi1_matrix(3,3) = 1.0;
             
-            phi_matrix(1,1) = cos_phi;
-            phi_matrix(1,2) = sin_phi;
+            % rotation w.r.t. x axis
+            phi_matrix(1,1) = 1.0;
+            phi_matrix(1,2) = 0.0;
             phi_matrix(1,3) = 0.0;
-            phi_matrix(2,1) = -sin_phi;
+            phi_matrix(2,1) = 0.0;
             phi_matrix(2,2) = cos_phi;
-            phi_matrix(2,3) = 0.0;
+            phi_matrix(2,3) = sin_phi;
             phi_matrix(3,1) = 0.0;
-            phi_matrix(3,2) = 0.0;
-            phi_matrix(3,3) = 1.0;
+            phi_matrix(3,2) = -sin_phi;
+            phi_matrix(3,3) = cos_phi;
             
-            euler_matrix = theta_matrix * phi_matrix;
+            % rotation w.r.t. z axis
+            phi2_matrix(1,1) = cos_phi2;
+            phi2_matrix(1,2) = sin_phi2;
+            phi2_matrix(1,3) = 0.0;
+            phi2_matrix(2,1) = -sin_phi2;
+            phi2_matrix(2,2) = cos_phi2;
+            phi2_matrix(2,3) = 0.0;
+            phi2_matrix(3,1) = 0.0;
+            phi2_matrix(3,2) = 0.0;
+            phi2_matrix(3,3) = 1.0;
+            
+            euler_matrix = phi2_matrix * phi_matrix * phi1_matrix;
         end
+    
+        % A whole bunch of 'get' function
+        
+        function fren = get_Gc_c(obj)
+            fren = obj.Gc_c;
+        end
+        
+        function lgsc = get_l0_c(obj)
+            lgsc = obj.l0_c;
+        end
+        
+        function tmp = get_A_t(obj)
+            tmp = obj.A_t;
+        end
+        
+        function tmp = get_k_t(obj) % k = 3 * Gamma * l / 4
+            tmp = obj.k_t;
+        end
+        
+        function tmp = get_tau(obj) % return resolved shear stress
+            tmp = obj.tau_t;
+        end
+        
+        function tmp = get_gamma0_t(obj)
+            tmp = obj.gamma0_t;
+        end
+        
+        function tmp = get_phip_t(obj)
+            tmp = obj.phip_t;
+        end
+        
+        function tmp = get_phipp_t(obj)
+            tmp = obj.phipp_t;
+        end
+        
+        function tmp = get_g_c(obj)
+            tmp = obj.g_c;
+        end
+        
+        function tmp = get_gp_c(obj)
+            tmp = obj.gp_c;
+        end
+        
+        function tmp = get_gpp_c(obj)
+            tmp = obj.gpp_c;
+        end
+        
+        function tmp = get_dtau_dpft(obj)
+            tmp = obj.tol;
+        end
+        
+        function tmp = get_dtau_dpfc(obj)
+            tmp = obj.tol;
+        end
+        
+        function tmp = get_dH_dpft(obj)
+            tmp = obj.tol;
+        end
+        
+        function tmp = get_Hn1_c(obj)
+            tmp = obj.Hn1_c;
+        end
+        
+        function tmp = get_dH_dpfc(obj)
+            tmp = obj.tol;
+        end
+        
+        function tmp = get_dH_deps(obj)
+            tmp = obj.tol;
+        end
+        
+        function tmp = get_dtau_deps(obj)
+            tmp = obj.tol;
+        end
+        
+        function tmp = get_dsigma_dpft(obj)
+            tmp = obj.tol;
+        end
+        
+        function tmp = get_dsigma_dpfc(obj)
+            tmp = obj.tol;
+        end
+        
     end
     
     methods (Static)
