@@ -179,6 +179,7 @@ classdef PhaseFieldMultiCrystal < handle
             obj.new_tau                  = obj.tau_ini;
             obj.new_active_set = zeros(2 * obj.num_slip_system + 1, 1);
             
+            obj.degrade         = 0;
             obj.new_H_plus_0    = 0;
             obj.degrade_0       = 0;
             obj.degrade_0_deriv = 0;
