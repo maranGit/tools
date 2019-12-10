@@ -65,44 +65,21 @@ classdef PhaseFieldMultiCrystal < handle
         old_plastic_slip;
         old_old_plastic_slip;
         
-        new_plastic_slip_0;
-        old_plastic_slip_0;
-        old_old_plastic_slip_0;
-        
-        new_plastic_slip_1;
-        old_plastic_slip_1;
-        old_old_plastic_slip_1;
-        
-        new_plastic_slip_2;
-        old_plastic_slip_2;
-        old_old_plastic_slip_2;
-        
-        new_plastic_slip_3;
-        old_plastic_slip_3;
-        old_old_plastic_slip_3;
-        
-        new_plastic_slip_4;
-        old_plastic_slip_4;
-        old_old_plastic_slip_4;
-        
-        new_plastic_slip_5;
-        old_plastic_slip_5;
-        old_old_plastic_slip_5;
+        new_plastic_slip_i;
+        old_plastic_slip_i;
+        old_old_plastic_slip_i;
         
         % NaCl Slip system
-        num_slip_system = 6;
-        slip_normal = [ 1.0, 1.0, 0.0;
-            1.0,-1.0, 0.0;
-            1.0, 0.0, 1.0;
-            1.0, 0.0,-1.0;
-            0.0, 1.0, 1.0;
-            0.0, 1.0,-1.0];
-        slip_direct = [1.0,-1.0, 0.0;
-            1.0, 1.0, 0.0;
-            1.0, 0.0,-1.0;
-            1.0, 0.0, 1.0;
-            0.0, 1.0,-1.0;
-            0.0, 1.0, 1.0];
+        % ALL slip systems with different orientation
+        % Do NOT include the same slip system
+        % with opposite normal or shear direction
+        %     0: rock salt
+        %     1: FCC
+        %     2: beta-HMX
+        slip_type;
+        num_slip_system;
+        slip_normal;
+        slip_direct;
         
         new_active_set; % std::vector<unsigned>
         old_active_set; % std::vector<unsigned>
@@ -143,7 +120,108 @@ classdef PhaseFieldMultiCrystal < handle
     end
     
     methods
-        function obj = PhaseFieldMultiCrystal()
+        % constructor without default input value
+        function obj = PhaseFieldMultiCrystal(s_type)
+            obj.slip_type = s_type;
+            if s_type == 0
+                obj.num_slip_system = 6;
+                obj.slip_normal = [ 1.0, 1.0, 0.0;
+                    1.0,-1.0, 0.0;
+                    1.0, 0.0, 1.0;
+                    1.0, 0.0,-1.0;
+                    0.0, 1.0, 1.0;
+                    0.0, 1.0,-1.0];
+                obj.slip_direct = [1.0,-1.0, 0.0;
+                    1.0, 1.0, 0.0;
+                    1.0, 0.0,-1.0;
+                    1.0, 0.0, 1.0;
+                    0.0, 1.0,-1.0;
+                    0.0, 1.0, 1.0];
+            elseif s_type == 1
+                obj.num_slip_system = 12;
+                obj.slip_normal = zeros(obj.num_slip_system, 3);
+                obj.slip_direct = zeros(obj.num_slip_system, 3);
+                f = 1/sqrt(2.0D0);
+
+                obj.slip_direct(1,1)=0;
+                obj.slip_direct(1,2)=-f;
+                obj.slip_direct(1,3)=f;
+                obj.slip_direct(2,1)=f;
+                obj.slip_direct(2,2)=0;
+                obj.slip_direct(2,3)=-f;
+                obj.slip_direct(3,1)=-f;
+                obj.slip_direct(3,2)=f;
+                obj.slip_direct(3,3)=0;
+                obj.slip_direct(4,1)=0;
+                obj.slip_direct(4,2)=f;
+                obj.slip_direct(4,3)=f;
+                obj.slip_direct(5,1)=f;
+                obj.slip_direct(5,2)=0;
+                obj.slip_direct(5,3)=f;
+                obj.slip_direct(6,1)=f;
+                obj.slip_direct(6,2)=-f;
+                obj.slip_direct(6,3)=0;
+                obj.slip_direct(7,1)=0;
+                obj.slip_direct(7,2)=-f;
+                obj.slip_direct(7,3)=f;
+                obj.slip_direct(8,1)=-f;
+                obj.slip_direct(8,2)=0;
+                obj.slip_direct(8,3)=-f;
+                obj.slip_direct(9,1)=f;
+                obj.slip_direct(9,2)=f;
+                obj.slip_direct(9,3)=0;
+                obj.slip_direct(10,1)=0;
+                obj.slip_direct(10,2)=f;
+                obj.slip_direct(10,3)=f;
+                obj.slip_direct(11,1)=f;
+                obj.slip_direct(11,2)=0;
+                obj.slip_direct(11,3)=-f;
+                obj.slip_direct(12,1)=-f;
+                obj.slip_direct(12,2)=-f;
+                obj.slip_direct(12,3)=0;
+
+                f = 1/sqrt(3.0D0);
+                obj.slip_normal(1,1)=f;
+                obj.slip_normal(1,2)=f;
+                obj.slip_normal(1,3)=f;
+                obj.slip_normal(2,1)=f;
+                obj.slip_normal(2,2)=f;
+                obj.slip_normal(2,3)=f;
+                obj.slip_normal(3,1)=f;
+                obj.slip_normal(3,2)=f;
+                obj.slip_normal(3,3)=f;
+                obj.slip_normal(4,1)=-f;
+                obj.slip_normal(4,2)=-f;
+                obj.slip_normal(4,3)=f;
+                obj.slip_normal(5,1)=-f;
+                obj.slip_normal(5,2)=-f;
+                obj.slip_normal(5,3)=f;
+                obj.slip_normal(6,1)=-f;
+                obj.slip_normal(6,2)=-f;
+                obj.slip_normal(6,3)=f;
+                obj.slip_normal(7,1)=-f;
+                obj.slip_normal(7,2)=f;
+                obj.slip_normal(7,3)=f;
+                obj.slip_normal(8,1)=-f;
+                obj.slip_normal(8,2)=f;
+                obj.slip_normal(8,3)=f;
+                obj.slip_normal(9,1)=-f;
+                obj.slip_normal(9,2)=f;
+                obj.slip_normal(9,3)=f;
+                obj.slip_normal(10,1)=f;
+                obj.slip_normal(10,2)=-f;
+                obj.slip_normal(10,3)=f;
+                obj.slip_normal(11,1)=f;
+                obj.slip_normal(11,2)=-f;
+                obj.slip_normal(11,3)=f;
+                obj.slip_normal(12,1)=f;
+                obj.slip_normal(12,2)=-f;
+                obj.slip_normal(12,3)=f;
+            elseif s_type == 2
+                error('>>> Error: HMX slip system is not implemented yet!');
+            else
+                error('>>> Error: Unknown slip type!');
+            end
         end
         
         function initialize(obj)
@@ -176,12 +254,9 @@ classdef PhaseFieldMultiCrystal < handle
             obj.new_plastic_strain       = zeros(3,1);
             obj.new_equiv_plastic_strain = 0;
             obj.new_plastic_slip         = 0;
-            obj.new_plastic_slip_0       = 0;
-            obj.new_plastic_slip_1       = 0;
-            obj.new_plastic_slip_2       = 0;
-            obj.new_plastic_slip_3       = 0;
-            obj.new_plastic_slip_4       = 0;
-            obj.new_plastic_slip_5       = 0;
+            obj.new_plastic_slip_i       = zeros(obj.num_slip_system, 1);
+            obj.old_plastic_slip_i       = zeros(obj.num_slip_system, 1);
+            obj.old_old_plastic_slip_i   = zeros(obj.num_slip_system, 1);
             obj.new_tau                  = obj.tau_ini;
             obj.new_active_set = zeros(2 * obj.num_slip_system + 1, 1);
             
@@ -325,13 +400,9 @@ classdef PhaseFieldMultiCrystal < handle
             % Update strain history variable
             strain_energy_plus = 0.5*obj.K*tr_eps_plus*tr_eps_plus...
                 + obj.mu*transpose(dev_starin)*I4*dev_starin;
+            
             plastic_energy = 0.5*obj.hardening*(...
-                obj.new_plastic_slip_0 * obj.new_plastic_slip_0 ...
-                + obj.new_plastic_slip_1 * obj.new_plastic_slip_1 ...
-                + obj.new_plastic_slip_2 * obj.new_plastic_slip_2 ...
-                + obj.new_plastic_slip_3 * obj.new_plastic_slip_3 ...
-                + obj.new_plastic_slip_4 * obj.new_plastic_slip_4 ...
-                + obj.new_plastic_slip_5 * obj.new_plastic_slip_5);
+                transpose(obj.new_plastic_slip_i) * obj.new_plastic_slip_i);
             
             % Update H plus for multiphase
             strain_energy = strain_energy_plus+plastic_energy;
@@ -358,19 +429,9 @@ classdef PhaseFieldMultiCrystal < handle
             obj.old_active_set           = obj.new_active_set;
             % Plastic slip
             obj.old_old_plastic_slip     = obj.old_plastic_slip;
-            obj.old_old_plastic_slip_0   = obj.old_plastic_slip_0;
-            obj.old_old_plastic_slip_1   = obj.old_plastic_slip_1;
-            obj.old_old_plastic_slip_2   = obj.old_plastic_slip_2;
-            obj.old_old_plastic_slip_3   = obj.old_plastic_slip_3;
-            obj.old_old_plastic_slip_4   = obj.old_plastic_slip_4;
-            obj.old_old_plastic_slip_5   = obj.old_plastic_slip_5;
             obj.old_plastic_slip         = obj.new_plastic_slip;
-            obj.old_plastic_slip_0       = obj.new_plastic_slip_0;
-            obj.old_plastic_slip_1       = obj.new_plastic_slip_1;
-            obj.old_plastic_slip_2       = obj.new_plastic_slip_2;
-            obj.old_plastic_slip_3       = obj.new_plastic_slip_3;
-            obj.old_plastic_slip_4       = obj.new_plastic_slip_4;
-            obj.old_plastic_slip_5       = obj.new_plastic_slip_5;
+            obj.old_old_plastic_slip_i   = obj.old_plastic_slip_i;
+            obj.old_plastic_slip_i       = obj.new_plastic_slip_i;
             % Driving force
             obj.Hn_c                     = obj.Hn1_c;
         end
@@ -389,19 +450,9 @@ classdef PhaseFieldMultiCrystal < handle
             obj.new_active_set           = obj.old_active_set;
             % Plastic slip
             obj.new_plastic_slip         = obj.old_plastic_slip;
-            obj.new_plastic_slip_0       = obj.old_plastic_slip_0;
-            obj.new_plastic_slip_1       = obj.old_plastic_slip_1;
-            obj.new_plastic_slip_2       = obj.old_plastic_slip_2;
-            obj.new_plastic_slip_3       = obj.old_plastic_slip_3;
-            obj.new_plastic_slip_4       = obj.old_plastic_slip_4;
-            obj.new_plastic_slip_5       = obj.old_plastic_slip_5;
             obj.old_plastic_slip         = obj.old_old_plastic_slip;
-            obj.old_plastic_slip_0       = obj.old_old_plastic_slip_0;
-            obj.old_plastic_slip_1       = obj.old_old_plastic_slip_1;
-            obj.old_plastic_slip_2       = obj.old_old_plastic_slip_2;
-            obj.old_plastic_slip_3       = obj.old_old_plastic_slip_3;
-            obj.old_plastic_slip_4       = obj.old_old_plastic_slip_4;
-            obj.old_plastic_slip_5       = obj.old_old_plastic_slip_5;
+            obj.new_plastic_slip_i       = obj.old_plastic_slip_i;
+            obj.old_plastic_slip_i       = obj.old_old_plastic_slip_i;
             % Driving force
             obj.Hn1_c                    = obj.Hn_c;
         end
@@ -469,27 +520,27 @@ classdef PhaseFieldMultiCrystal < handle
         end
         
         function plsl = plastic_slip_new_0(obj)
-            plsl = obj.new_plastic_slip_0;
+            plsl = obj.new_plastic_slip_i(1);
         end
         
         function plsl = plastic_slip_new_1(obj)
-            plsl = obj.new_plastic_slip_1;
+            plsl = obj.new_plastic_slip_i(2);
         end
         
         function plsl = plastic_slip_new_2(obj)
-            plsl = obj.new_plastic_slip_2;
+            plsl = obj.new_plastic_slip_i(3);
         end
         
         function plsl = plastic_slip_new_3(obj)
-            plsl = obj.new_plastic_slip_3;
+            plsl = obj.new_plastic_slip_i(4);
         end
         
         function plsl = plastic_slip_new_4(obj)
-            plsl = obj.new_plastic_slip_4;
+            plsl = obj.new_plastic_slip_i(5);
         end
         
         function plsl = plastic_slip_new_5(obj)
-            plsl = obj.new_plastic_slip_5;
+            plsl = obj.new_plastic_slip_i(6);
         end
         
         % Energy dissipation
@@ -502,22 +553,9 @@ classdef PhaseFieldMultiCrystal < handle
         end
         
         function temp = old_hardening_dissipation(obj)
-            old_plastic_slip_rate_0 = obj.old_plastic_slip_0 - obj.old_old_plastic_slip_0;
-            old_plastic_slip_rate_1 = obj.old_plastic_slip_1 - obj.old_old_plastic_slip_1;
-            old_plastic_slip_rate_2 = obj.old_plastic_slip_2 - obj.old_old_plastic_slip_2;
-            old_plastic_slip_rate_3 = obj.old_plastic_slip_3 - obj.old_old_plastic_slip_3;
-            old_plastic_slip_rate_4 = obj.old_plastic_slip_4 - obj.old_old_plastic_slip_4;
-            old_plastic_slip_rate_5 = obj.old_plastic_slip_5 - obj.old_old_plastic_slip_5;
-            
-            old_hds_0 = obj.hardening * obj.old_plastic_slip_0 * old_plastic_slip_rate_0;
-            old_hds_1 = obj.hardening * obj.old_plastic_slip_1 * old_plastic_slip_rate_1;
-            old_hds_2 = obj.hardening * obj.old_plastic_slip_2 * old_plastic_slip_rate_2;
-            old_hds_3 = obj.hardening * obj.old_plastic_slip_3 * old_plastic_slip_rate_3;
-            old_hds_4 = obj.hardening * obj.old_plastic_slip_4 * old_plastic_slip_rate_4;
-            old_hds_5 = obj.hardening * obj.old_plastic_slip_5 * old_plastic_slip_rate_5;
-            
-            tmp_hds = old_hds_0 + old_hds_1 + old_hds_2 + old_hds_3 + old_hds_4 + old_hds_5;
-            
+            old_plastic_slip_rate_i = obj.old_plastic_slip_i - obj.old_old_plastic_slip_i;
+            old_hds_i = obj.hardening * obj.old_plastic_slip_i * old_plastic_slip_rate_i;
+            tmp_hds = sum(old_hds_i);
             temp = -tmp_hds;
         end
         
@@ -536,12 +574,7 @@ classdef PhaseFieldMultiCrystal < handle
             obj.new_plastic_strain       = obj.old_plastic_strain;
             obj.new_equiv_plastic_strain = obj.old_equiv_plastic_strain;
             obj.new_plastic_slip         = obj.old_plastic_slip;
-            obj.new_plastic_slip_0       = obj.old_plastic_slip_0;
-            obj.new_plastic_slip_1       = obj.old_plastic_slip_1;
-            obj.new_plastic_slip_2       = obj.old_plastic_slip_2;
-            obj.new_plastic_slip_3       = obj.old_plastic_slip_3;
-            obj.new_plastic_slip_4       = obj.old_plastic_slip_4;
-            obj.new_plastic_slip_5       = obj.old_plastic_slip_5;
+            obj.new_plastic_slip_i       = obj.old_plastic_slip_i;
             obj.new_tau                  = obj.old_tau;
             obj.new_active_set           = obj.old_active_set;
             
@@ -619,13 +652,6 @@ classdef PhaseFieldMultiCrystal < handle
             
             tmp_elastic_strain = zeros(6,1);
             tmp_plastic_strain = zeros(6,1);
-            % tmp_plastic_slip   = 0;
-            % tmp_plastic_slip_0 = 0;
-            % tmp_plastic_slip_1 = 0;
-            % tmp_plastic_slip_2 = 0;
-            % tmp_plastic_slip_3 = 0;
-            % tmp_plastic_slip_4 = 0;
-            % tmp_plastic_slip_5 = 0;
             
             % Active set iteration
             for S_iter = 0:14
@@ -654,59 +680,20 @@ classdef PhaseFieldMultiCrystal < handle
                     for N_iter = 0:19
                         tmp_plastic_strain = zeros(6,1);
                         tmp_plastic_slip   = 0;
-                        tmp_plastic_slip_0 = 0;
-                        tmp_plastic_slip_1 = 0;
-                        tmp_plastic_slip_2 = 0;
-                        tmp_plastic_slip_3 = 0;
-                        tmp_plastic_slip_4 = 0;
-                        tmp_plastic_slip_5 = 0;
-                    
+                        tmp_plastic_slip_i = zeros(obj.num_slip_system, 1);
                         % Temporary plastic strain
                         for ii = 1:active_set(n21)
                             alpha = active_set(ii);
                             tmp_plastic_strain = tmp_plastic_strain + Gamma(ii)*P_Schmid(:,alpha);
                             tmp_plastic_slip   = tmp_plastic_slip + Gamma(ii);
-
-                            % if (alpha == 0 || alpha == 6)
-                            if (alpha == 1 || alpha == 7)
-                                tmp_plastic_slip_0 = tmp_plastic_slip_0 + Gamma(ii);
-                            end
-
-                            % if (alpha == 1 || alpha == 7)
-                            if (alpha == 2 || alpha == 8)
-                                tmp_plastic_slip_1 = tmp_plastic_slip_1 + Gamma(ii);
-                            end
-
-                            % if (alpha == 2 || alpha == 8)
-                            if (alpha == 3 || alpha == 9)
-                                tmp_plastic_slip_2 = tmp_plastic_slip_2 + Gamma(ii);
-                            end
-
-                            % if (alpha == 3 || alpha == 9)
-                            if (alpha == 4 || alpha == 10)
-                                tmp_plastic_slip_3 = tmp_plastic_slip_3 + Gamma(ii);
-                            end
-
-                            % if (alpha == 4 || alpha == 10)
-                            if (alpha == 5 || alpha == 11)
-                                tmp_plastic_slip_4 = tmp_plastic_slip_4 + Gamma(ii);
-                            end
-
-                            % if (alpha == 5 || alpha == 11)
-                            if (alpha == 6 || alpha == 12)
-                                tmp_plastic_slip_5 = tmp_plastic_slip_5 + Gamma(ii);
-                            end
+                            curr_slip = mod(alpha-1, obj.num_slip_system) + 1;
+                            tmp_plastic_slip_i(curr_slip) = tmp_plastic_slip_i(curr_slip) + Gamma(ii);
                         end
 
                         tmp_elastic_strain = obj.new_elastic_strain - tmp_plastic_strain;
 
                         obj.new_plastic_slip   = obj.old_plastic_slip   + tmp_plastic_slip;
-                        obj.new_plastic_slip_0 = obj.old_plastic_slip_0 + tmp_plastic_slip_0;
-                        obj.new_plastic_slip_1 = obj.old_plastic_slip_1 + tmp_plastic_slip_1;
-                        obj.new_plastic_slip_2 = obj.old_plastic_slip_2 + tmp_plastic_slip_2;
-                        obj.new_plastic_slip_3 = obj.old_plastic_slip_3 + tmp_plastic_slip_3;
-                        obj.new_plastic_slip_4 = obj.old_plastic_slip_4 + tmp_plastic_slip_4;
-                        obj.new_plastic_slip_5 = obj.old_plastic_slip_5 + tmp_plastic_slip_5;
+                        obj.new_plastic_slip_i = obj.old_plastic_slip_i + tmp_plastic_slip_i;
 
                         obj.new_stress         = obj.elastic_cto * tmp_elastic_strain;
 
