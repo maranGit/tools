@@ -134,8 +134,9 @@ classdef PhaseFieldMultiCrystal < handle
         sm_t; % twinning strain mode
         strain_twin; % twinning strain
         tau_t; % shear stress on the twinning plane
-        svec_t = [1; 0; 0];
-        mvec_t = [0; 1; 0];
+        svec_t = [1; 0; 0]; % shear direction of twinning plane
+        mvec_t = [0; 1; 0]; % normal direction of twinning plane
+        Q_t; % rotation matrix of twinning deformation
         
         % constants
         tol = 1.0e-9;
@@ -276,25 +277,7 @@ classdef PhaseFieldMultiCrystal < handle
         end
         
         function update_slip_plane(obj)
-            % Slip plane
-            A = zeros (6, obj.num_slip_system); % for elasticity
-            
             rotation_matrix = obj.update_R_matrix();
-            
-            for i = 1:obj.num_slip_system
-                structure = transpose( obj.slip_normal(i,1:3) );
-                % Normalize
-                structure = structure / norm(structure);
-                Rs = rotation_matrix * structure;
-                A_temp = Rs * transpose(Rs);
-                A(1,i) = A_temp(1,1);
-                A(2,i) = A_temp(2,2);
-                A(3,i) = A_temp(3,3);
-                A(4,i) = 0.5 * ( A_temp(1,2) + A_temp(2,1) );
-                A(5,i) = 0.5 * ( A_temp(1,3) + A_temp(3,1) );
-                A(6,i) = 0.5 * ( A_temp(2,3) + A_temp(3,2) );
-            end
-            
             % update twinning plane
             svec = obj.svec_t;
             mvec = obj.mvec_t;
@@ -306,6 +289,11 @@ classdef PhaseFieldMultiCrystal < handle
             sm(5)   = svec(1)*mvec(3) + svec(3)*mvec(1);
             sm(6)   = svec(2)*mvec(3) + svec(3)*mvec(2);
             obj.sm_t = sm;
+            % proper twinning rotation matrix
+            % Clayton, Knap, 2011
+            % rotate around mvec for 180 degree
+            % -Q*v is the mirror of v w.r.t. the mvec plane
+            obj.Q_t  = 2 * mvec * transpose(mvec) - eye(3);
         end
         
         function update_strain_energy(obj)
@@ -575,13 +563,15 @@ classdef PhaseFieldMultiCrystal < handle
                 
                 % Assemble Schmid tensor alpha
                 P_Schmid_tmp = 0.5*rot_matrix*(m_normal*s_direct' + s_direct*m_normal')*transpose(rot_matrix);
+                P_Schmid_twn = obj.Q_t * P_Schmid_tmp * transpose( obj.Q_t );
+                P_Schmid_tpt = (1-obj.phi_t)*P_Schmid_tmp + obj.phi_t*P_Schmid_twn;
                 
-                P_Schmid(1,ii) = P_Schmid_tmp(1,1);
-                P_Schmid(2,ii) = P_Schmid_tmp(2,2);
-                P_Schmid(3,ii) = P_Schmid_tmp(3,3);
-                P_Schmid(4,ii) = P_Schmid_tmp(1,2)+P_Schmid_tmp(2,1);
-                P_Schmid(5,ii) = P_Schmid_tmp(1,3)+P_Schmid_tmp(3,1);
-                P_Schmid(6,ii) = P_Schmid_tmp(2,3)+P_Schmid_tmp(3,2);
+                P_Schmid(1,ii) = P_Schmid_tpt(1,1);
+                P_Schmid(2,ii) = P_Schmid_tpt(2,2);
+                P_Schmid(3,ii) = P_Schmid_tpt(3,3);
+                P_Schmid(4,ii) = P_Schmid_tpt(1,2)+P_Schmid_tpt(2,1);
+                P_Schmid(5,ii) = P_Schmid_tpt(1,3)+P_Schmid_tpt(3,1);
+                P_Schmid(6,ii) = P_Schmid_tpt(2,3)+P_Schmid_tpt(3,2);
                 
                 P_Schmid(1:6,ii+nslip) = -P_Schmid(1:6,ii);
             end
