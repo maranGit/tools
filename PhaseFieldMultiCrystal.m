@@ -115,6 +115,10 @@ classdef PhaseFieldMultiCrystal < handle
         mvec_t = [0; 1; 0]; % normal direction of twinning plane
         Q_t; % rotation matrix of twinning deformation
         
+        % slip system
+        P_Schmid_notw;
+        P_Schmid_twin;
+        
         % constants
         tol = 1.0e-9;
     end
@@ -352,12 +356,13 @@ classdef PhaseFieldMultiCrystal < handle
         end
         
         function update_slip_plane(obj)
-            rotation_matrix = obj.update_R_matrix();
+            rot_matrix = obj.update_R_matrix();
+            
             % update twinning plane
-            svec = obj.svec_t;
-            mvec = obj.mvec_t;
-            svec = rotation_matrix * svec;
-            mvec = rotation_matrix * mvec;
+            svec = obj.svec_t / norm(obj.svec_t);
+            mvec = obj.mvec_t / norm(obj.mvec_t);
+            svec = rot_matrix * svec;
+            mvec = rot_matrix * mvec;
             sm   = zeros(6,1);
             sm(1:3) = svec .* mvec;
             sm(4)   = svec(1)*mvec(2) + svec(2)*mvec(1);
@@ -369,6 +374,34 @@ classdef PhaseFieldMultiCrystal < handle
             % rotate around mvec for 180 degree
             % -Q*v is the mirror of v w.r.t. the mvec plane
             obj.Q_t  = 2 * mvec * transpose(mvec) - eye(3);
+            
+            % initialize slip plane from crystal to spatial
+            nslip = obj.num_slip_system;
+            n20   = 2 * nslip;
+            P_Schmid = zeros(6,n20);
+            for ii = 1:nslip
+                m_normal = transpose(obj.slip_normal(ii,1:3));
+                s_direct = transpose(obj.slip_direct(ii,1:3));
+                % Normalize
+                m_normal = m_normal / norm(m_normal);
+                s_direct = s_direct / norm(s_direct);
+                % Assemble Schmid tensor alpha
+                P_Schmid_tmp = 0.5*rot_matrix*(m_normal*s_direct' + s_direct*m_normal')*transpose(rot_matrix);
+                
+                P_Schmid(1,ii) = P_Schmid_tmp(1,1);
+                P_Schmid(2,ii) = P_Schmid_tmp(2,2);
+                P_Schmid(3,ii) = P_Schmid_tmp(3,3);
+                P_Schmid(4,ii) = P_Schmid_tmp(1,2)+P_Schmid_tmp(2,1);
+                P_Schmid(5,ii) = P_Schmid_tmp(1,3)+P_Schmid_tmp(3,1);
+                P_Schmid(6,ii) = P_Schmid_tmp(2,3)+P_Schmid_tmp(3,2);
+                
+                P_Schmid(1:6,ii+nslip) = -P_Schmid(1:6,ii);
+            end
+            obj.P_Schmid_notw = P_Schmid;
+            
+            % initialize slip system in twinning region
+            Q66 = obj.mm10_RT2RVE(obj.Q_t);
+            obj.P_Schmid_twin = Q66 * P_Schmid;
         end
         
         function update_strain_energy(obj)
@@ -585,29 +618,8 @@ classdef PhaseFieldMultiCrystal < handle
             nslip = obj.num_slip_system;
             n20   = 2 * nslip;
             n21   = n20 + 1;
-            P_Schmid = zeros(6,n20);
-            rot_matrix = obj.update_R_matrix();
-            for ii = 1:nslip
-                m_normal = transpose(obj.slip_normal(ii,1:3));
-                s_direct = transpose(obj.slip_direct(ii,1:3));
-                % Normalize
-                m_normal = m_normal / norm(m_normal);
-                s_direct = s_direct / norm(s_direct);
-                
-                % Assemble Schmid tensor alpha
-                P_Schmid_tmp = 0.5*rot_matrix*(m_normal*s_direct' + s_direct*m_normal')*transpose(rot_matrix);
-                P_Schmid_twn = obj.Q_t * P_Schmid_tmp * transpose( obj.Q_t );
-                P_Schmid_tpt = (1-obj.phi_t)*P_Schmid_tmp + obj.phi_t*P_Schmid_twn;
-                
-                P_Schmid(1,ii) = P_Schmid_tpt(1,1);
-                P_Schmid(2,ii) = P_Schmid_tpt(2,2);
-                P_Schmid(3,ii) = P_Schmid_tpt(3,3);
-                P_Schmid(4,ii) = P_Schmid_tpt(1,2)+P_Schmid_tpt(2,1);
-                P_Schmid(5,ii) = P_Schmid_tpt(1,3)+P_Schmid_tpt(3,1);
-                P_Schmid(6,ii) = P_Schmid_tpt(2,3)+P_Schmid_tpt(3,2);
-                
-                P_Schmid(1:6,ii+nslip) = -P_Schmid(1:6,ii);
-            end
+%             P_Schmid = obj.P_Schmid_twin;
+            P_Schmid = (1-obj.phi_t) * obj.P_Schmid_notw + obj.phi_t * obj.P_Schmid_twin;
             
             % Identify potentially active systems (F > 0)
             trial_active_set = zeros(n21, 1);
@@ -966,6 +978,52 @@ classdef PhaseFieldMultiCrystal < handle
                 end
             end
             jacobian_inv = V * S_inv * transpose(U);
+        end
+        function RV = mm10_RT2RVE(RT)
+%             implicit none
+%             double precision, dimension(3,3), intent(in) :: RT
+%             double precision, dimension(6,6), intent(out) :: RV
+%
+%           voigt notation: 11, 22, 33, 12, 13, 23
+%           for strain type tensor only
+            RV(1,1)=RT(1,1)^2;
+            RV(1,2)=RT(1,2)^2;
+            RV(1,3)=RT(1,3)^2;
+            RV(1,4)=RT(1,1)*RT(1,2);
+            RV(1,5)=RT(1,1)*RT(1,3);
+            RV(1,6)=RT(1,3)*RT(1,2);
+            RV(2,1)=RT(2,1)^2;
+            RV(2,2)=RT(2,2)^2;
+            RV(2,3)=RT(2,3)^2;
+            RV(2,4)=RT(2,1)*RT(2,2);
+            RV(2,5)=RT(2,1)*RT(2,3);
+            RV(2,6)=RT(2,3)*RT(2,2);
+            RV(3,1)=RT(3,1)^2;
+            RV(3,2)=RT(3,2)^2;
+            RV(3,3)=RT(3,3)^2;
+            RV(3,4)=RT(3,1)*RT(3,2);
+            RV(3,5)=RT(3,1)*RT(3,3);
+            RV(3,6)=RT(3,3)*RT(3,2);
+            RV(4,1)=2*RT(1,1)*RT(2,1);
+            RV(4,2)=2*RT(1,2)*RT(2,2);
+            RV(4,3)=2*RT(1,3)*RT(2,3);
+            RV(4,4)=RT(1,1)*RT(2,2)+RT(2,1)*RT(1,2);
+            RV(4,5)=RT(1,1)*RT(2,3)+RT(1,3)*RT(2,1);
+            RV(4,6)=RT(1,2)*RT(2,3)+RT(1,3)*RT(2,2);
+            RV(5,1)=2*RT(1,1)*RT(3,1);
+            RV(5,2)=2*RT(1,2)*RT(3,2);
+            RV(5,3)=2*RT(1,3)*RT(3,3);
+            RV(5,4)=RT(1,1)*RT(3,2)+RT(1,2)*RT(3,1);
+            RV(5,5)=RT(1,1)*RT(3,3)+RT(3,1)*RT(1,3);
+            RV(5,6)=RT(1,2)*RT(3,3)+RT(1,3)*RT(3,2);
+            RV(6,1)=2*RT(2,1)*RT(3,1);
+            RV(6,2)=2*RT(3,2)*RT(2,2);
+            RV(6,3)=2*RT(2,3)*RT(3,3);
+            RV(6,4)=RT(2,1)*RT(3,2)+RT(2,2)*RT(3,1);
+            RV(6,5)=RT(2,1)*RT(3,3)+RT(2,3)*RT(3,1);
+            RV(6,6)=RT(2,2)*RT(3,3)+RT(3,2)*RT(2,3);
+            %
+            %             return
         end
     end
 end
