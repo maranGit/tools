@@ -641,7 +641,6 @@ classdef PhaseFieldMultiCrystal < handle
             end
             
             % update state variables
-            [~, jacobian] = obj.formR_ori(Gamma, P_Schmid);
             tmp_plastic_strain = P_Schmid * Gamma;
             tmp_plastic_slip_i = abs( Gamma );
             tmp_plastic_slip = sum( tmp_plastic_slip_i );
@@ -656,12 +655,14 @@ classdef PhaseFieldMultiCrystal < handle
             CTO_jacobian_inv = obj.update_jacobian_inverse(S,U,V);
             
             % Update CTO
+            taus = transpose( P_Schmid ) * obj.new_stress;
             obj.new_cto = obj.elastic_cto;
             for ii = 1:nslip
                 for jj = 1:nslip
+                    ptaup = obj.exponent * ( abs( taus(jj) ) ) ^ ( obj.exponent - 1 );
                     tmp_Schmid_a = obj.elastic_cto * P_Schmid(:,ii);
                     tmp_Schmid_b = obj.elastic_cto * P_Schmid(:,jj);
-                    obj.new_cto = obj.new_cto - CTO_jacobian_inv(ii,jj) * tmp_Schmid_a * transpose(tmp_Schmid_b);
+                    obj.new_cto = obj.new_cto - ptaup * CTO_jacobian_inv(ii,jj) * tmp_Schmid_a * transpose(tmp_Schmid_b);
                 end
             end
             
@@ -678,6 +679,7 @@ classdef PhaseFieldMultiCrystal < handle
         
         function [R,J] = formR(obj, Gamma, P_Schmid)
             % attention: J = - d(R) / d(gamma)
+            % verified against finite difference
             nslip = obj.num_slip_system;
             J = zeros(nslip, nslip);
             
@@ -689,8 +691,6 @@ classdef PhaseFieldMultiCrystal < handle
             % Isotropic hardening
             fd_new_tau = obj.old_tau + obj.hardening*tmp_plastic_slip;
             % Residual
-%             R = transpose(P_Schmid) * fd_new_stress ...
-%                 - fd_new_tau * ( ( obj.viscosity / obj.dt * abs(Gamma) ).^(1/obj.exponent) ) .* sign(Gamma);
             tau = transpose(P_Schmid) * fd_new_stress;
             R = ( abs(tau) ) .^ (obj.exponent) .* sign(tau) ...
                 - (fd_new_tau^(obj.exponent)) * obj.viscosity / obj.dt * Gamma;
@@ -698,7 +698,6 @@ classdef PhaseFieldMultiCrystal < handle
             % Jacobian matrix for local return mapping
             for ii = 1 : nslip
                 for jj = 1 : nslip
-                    % find the No. of slip system in active set
                     tmp_beta = obj.elastic_cto*P_Schmid(:,jj);
 
                     J(ii,jj) = transpose(P_Schmid(:,ii)) * tmp_beta * obj.exponent * (abs(tau(ii))^(obj.exponent-1) )...
@@ -707,41 +706,6 @@ classdef PhaseFieldMultiCrystal < handle
                     if (ii == jj)
                         J(ii,jj) = J(ii,jj) ...
                             + fd_new_tau^(obj.exponent)*(obj.viscosity/obj.dt);
-                    end
-
-                end
-            end
-        end
-        
-        function [R,J] = formR_ori(obj, Gamma, P_Schmid)
-            % attention: J = - d(R) / d(gamma)
-            nslip = obj.num_slip_system;
-            J = zeros(nslip, nslip);
-            
-            tmp_plastic_strain = P_Schmid * Gamma;
-            tmp_plastic_slip_i = abs( Gamma );
-            tmp_plastic_slip = sum( tmp_plastic_slip_i );
-            tmp_elastic_strain = obj.new_elastic_strain - tmp_plastic_strain;
-            fd_new_stress         = obj.elastic_cto * tmp_elastic_strain;
-            % Isotropic hardening
-            fd_new_tau = obj.old_tau + obj.hardening*tmp_plastic_slip;
-            % Residual
-            R = transpose(P_Schmid) * fd_new_stress ...
-                - fd_new_tau * ( ( obj.viscosity / obj.dt * abs(Gamma) ).^(1/obj.exponent) ) .* sign(Gamma);
-            
-            % Jacobian matrix for local return mapping
-            for ii = 1 : nslip
-                for jj = 1 : nslip
-                    % find the No. of slip system in active set
-                    tmp_beta = obj.elastic_cto*P_Schmid(:,jj);
-
-                    J(ii,jj) = transpose(P_Schmid(:,ii)) * tmp_beta ...
-                        + obj.hardening ...
-                        *((obj.viscosity/obj.dt*abs(Gamma(ii)))^(1/obj.exponent)) * sign(Gamma(ii)) * sign(Gamma(jj));
-                    if (ii == jj)
-                        J(ii,jj) = J(ii,jj) ...
-                            + obj.new_tau*(obj.viscosity/(obj.exponent*obj.dt))...
-                            *(((obj.viscosity/obj.dt)*abs(Gamma(ii)))^(1/obj.exponent-1));
                     end
 
                 end
