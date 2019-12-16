@@ -11,6 +11,7 @@
 % update 12/6/2019: reduce to 1 phase field for fracture
 % update 12/9/2019: update to my phase field fracture formulation
 % update 12/9/2019: twinning phase field
+% update 12/15/2019: remove yield surface, improve robustness
 %
 classdef PhaseFieldMultiCrystal < handle
     properties
@@ -80,9 +81,6 @@ classdef PhaseFieldMultiCrystal < handle
         num_slip_system;
         slip_normal;
         slip_direct;
-        
-        new_active_set; % std::vector<unsigned>
-        old_active_set; % std::vector<unsigned>
         
         % Yield stress
         new_tau;
@@ -262,7 +260,6 @@ classdef PhaseFieldMultiCrystal < handle
             obj.old_plastic_slip_i       = zeros(obj.num_slip_system, 1);
             obj.old_old_plastic_slip_i   = zeros(obj.num_slip_system, 1);
             obj.new_tau                  = obj.tau_ini;
-            obj.new_active_set = zeros(2 * obj.num_slip_system + 1, 1);
             
             % phase field fracture
             obj.Gc_c  = 1.15e-6;
@@ -377,8 +374,7 @@ classdef PhaseFieldMultiCrystal < handle
             
             % initialize slip plane from crystal to spatial
             nslip = obj.num_slip_system;
-            n20   = 2 * nslip;
-            P_Schmid = zeros(6,n20);
+            P_Schmid = zeros(6,nslip);
             for ii = 1:nslip
                 m_normal = transpose(obj.slip_normal(ii,1:3));
                 s_direct = transpose(obj.slip_direct(ii,1:3));
@@ -394,8 +390,6 @@ classdef PhaseFieldMultiCrystal < handle
                 P_Schmid(4,ii) = P_Schmid_tmp(1,2)+P_Schmid_tmp(2,1);
                 P_Schmid(5,ii) = P_Schmid_tmp(1,3)+P_Schmid_tmp(3,1);
                 P_Schmid(6,ii) = P_Schmid_tmp(2,3)+P_Schmid_tmp(3,2);
-                
-                P_Schmid(1:6,ii+nslip) = -P_Schmid(1:6,ii);
             end
             obj.P_Schmid_notw = P_Schmid;
             
@@ -459,7 +453,6 @@ classdef PhaseFieldMultiCrystal < handle
             obj.old_strain               = obj.new_strain;
             obj.old_equiv_plastic_strain = obj.new_equiv_plastic_strain;
             obj.old_tau                  = obj.new_tau;
-            obj.old_active_set           = obj.new_active_set;
             % Plastic slip
             obj.old_old_plastic_slip     = obj.old_plastic_slip;
             obj.old_plastic_slip         = obj.new_plastic_slip;
@@ -480,7 +473,6 @@ classdef PhaseFieldMultiCrystal < handle
             obj.new_strain               = obj.old_strain;
             obj.new_equiv_plastic_strain = obj.old_equiv_plastic_strain;
             obj.new_tau                  = obj.old_tau;
-            obj.new_active_set           = obj.old_active_set;
             % Plastic slip
             obj.new_plastic_slip         = obj.old_plastic_slip;
             obj.old_plastic_slip         = obj.old_old_plastic_slip;
@@ -609,212 +601,66 @@ classdef PhaseFieldMultiCrystal < handle
             obj.new_plastic_slip         = obj.old_plastic_slip;
             obj.new_plastic_slip_i       = obj.old_plastic_slip_i;
             obj.new_tau                  = obj.old_tau;
-            obj.new_active_set           = obj.old_active_set;
             
             prm_R    = 1.986e-3; % Gas constant (kcal/(mol.K))
             obj.viscosity = 1.0/(obj.prm_C*exp((-1.0)*obj.prm_Q/(prm_R*obj.temperature)));
             
             % Assign crystal slip system
             nslip = obj.num_slip_system;
-            n20   = 2 * nslip;
-            n21   = n20 + 1;
-%             P_Schmid = obj.P_Schmid_twin;
             P_Schmid = (1-obj.phi_t) * obj.P_Schmid_notw + obj.phi_t * obj.P_Schmid_twin;
             
-            % Identify potentially active systems (F > 0)
-            trial_active_set = zeros(n21, 1);
-            for ii=1:n20
-                trial_F = transpose( P_Schmid(:,ii) ) * obj.new_stress - obj.new_tau;
-                if ( trial_F > obj.tol)
-                    trial_active_set(n21) = trial_active_set(n21) + 1;
-                    temp = trial_active_set(n21);
-                    trial_active_set(temp) = ii;
-                end
+            % preprocessing for initial guess
+            Gamma0  = zeros(nslip, 1);
+            pre_iter = 10;
+            tau_s = transpose(P_Schmid) * obj.elastic_cto * obj.new_elastic_strain ...
+                - transpose(P_Schmid) * obj.elastic_cto * P_Schmid * Gamma0;
+            tau_s = tau_s / pre_iter;
+            dt_pre = obj.dt / pre_iter;
+            for ii = 1:pre_iter
+                tau_y  = obj.old_tau + obj.hardening*sum( abs( Gamma0 ) );
+                dGamma0 = dt_pre / obj.viscosity * (abs(tau_s)*ii/tau_y).^(obj.exponent) .* sign(tau_s);
+                Gamma0 = Gamma0 + dGamma0;
+            end
+
+            % actural Newton iteration
+            [resid, jacobian] = obj.formR(Gamma0, P_Schmid);
+            resid_ini = norm(resid);
+            resid_a = resid_ini;
+            resid_r = resid_a / resid_ini;
+            Gamma = Gamma0;
+            N_iter = 0;
+            while resid_r > 1.0e-10 && resid_a > 1.0e-20 && N_iter < 20
+                Gamma = Gamma + jacobian \ resid;
+                [resid, jacobian] = obj.formR(Gamma, P_Schmid);
+                resid_a = norm(resid);
+                resid_r = resid_a / resid_ini;
+                N_iter = N_iter + 1;
+            end
+            if N_iter == 20
+                error('>>> Error: material model fails to converge!');
             end
             
-            % ---------------------------------------------------------
-            % If size of trial_active_Set = 0, then Elastic response %
-            %                                                        %
-            if (trial_active_set(n21) < 1)                          %
-%                 obj.new_strain = obj.new_elastic_strain + obj.new_plastic_strain;   %
-                obj.new_strain = strain_n1;   %
-                %new_active_set.resize(0);                             %
-                obj.update_strain_energy();                                 %
-                return;                                                 %
-            end                                                         %
-            %                                                        %
-            % ---------------------------------------------------------
-            % Else Plastic
-            
-            if obj.verbose
-                if obj.old_active_set(n21) < 1
-                    fprintf("No initial active set!\n");
-                else
-                    fprintf("Initial active set: \n");
-                    format = repmat('%i ', 1, 2*nslip);
-                    format = strcat(format, '\n');
-                    fprintf(format, obj.old_active_set);
-                end
-            end
-            
-            % Define variables
-            active_set = zeros(n21,1);
-            % Gamma_min  = 0;
-            update_II  = 1;
-            
-            tmp_elastic_strain = zeros(6,1);
-            tmp_plastic_strain = zeros(6,1);
-            
-            % Active set iteration
-            for S_iter = 0:14
-                if S_iter == 0
-                    active_set = obj.old_active_set;
-                end
-                % Check the size of J_active set
-                update_I = active_set(n21) >= 1;
-                
-                % Start while loop
-                while update_I
-                    % Initial values for plastic slip
-                    Gamma = zeros(active_set(n21), 1);
-                    jacobian = zeros(active_set(n21),active_set(n21));
-                    jacobian_inv = zeros(active_set(n21),active_set(n21));
-                    residual = zeros(active_set(n21), 1);
-                    % xdelta = zeros(active_set(n21), 1);
-                    % hardening_moduli = zeros(active_set(n21),active_set(n21));
-                    
-                    tmp_elastic_strain = zeros(6,1);
-                    
-                    resid = norm(residual);
-                    resid_ini = 1 + resid;
-                    
-                    % Newton iteration
-                    for N_iter = 0:19
-                        tmp_plastic_strain = zeros(6,1);
-                        tmp_plastic_slip   = 0;
-                        tmp_plastic_slip_i = zeros(obj.num_slip_system, 1);
-                        % Temporary plastic strain
-                        for ii = 1:active_set(n21)
-                            alpha = active_set(ii);
-                            tmp_plastic_strain = tmp_plastic_strain + Gamma(ii)*P_Schmid(:,alpha);
-                            tmp_plastic_slip   = tmp_plastic_slip + Gamma(ii);
-                            curr_slip = mod(alpha-1, obj.num_slip_system) + 1;
-                            tmp_plastic_slip_i(curr_slip) = tmp_plastic_slip_i(curr_slip) + Gamma(ii);
-                        end
+            % update state variables
+            [~, jacobian] = obj.formR_ori(Gamma, P_Schmid);
+            tmp_plastic_strain = P_Schmid * Gamma;
+            tmp_plastic_slip_i = abs( Gamma );
+            tmp_plastic_slip = sum( tmp_plastic_slip_i );
+            tmp_elastic_strain = obj.new_elastic_strain - tmp_plastic_strain;
+            obj.new_plastic_slip   = obj.old_plastic_slip   + tmp_plastic_slip;
+            obj.new_plastic_slip_i = obj.old_plastic_slip_i + tmp_plastic_slip_i;
+            obj.new_stress         = obj.elastic_cto * tmp_elastic_strain;
+            obj.new_tau = obj.old_tau + obj.hardening*tmp_plastic_slip;
 
-                        tmp_elastic_strain = obj.new_elastic_strain - tmp_plastic_strain;
-
-                        obj.new_plastic_slip   = obj.old_plastic_slip   + tmp_plastic_slip;
-                        obj.new_plastic_slip_i = obj.old_plastic_slip_i + tmp_plastic_slip_i;
-
-                        obj.new_stress         = obj.elastic_cto * tmp_elastic_strain;
-
-                        % Isotropic hardening
-                        obj.new_tau = obj.old_tau + obj.hardening*tmp_plastic_slip;
-                        hardening_moduli = repmat(obj.hardening, active_set(n21), active_set(n21));
-
-                        % Residual
-                        for ii = 1 : active_set(n21)
-                            if Gamma(ii) < 0
-                                continue;
-                            end
-                            alpha = active_set(ii);
-                            residual(ii) = transpose(obj.new_stress) * P_Schmid(:,alpha) ...
-                                - obj.new_tau*( (obj.viscosity/obj.dt*Gamma(ii)+1)^(1/obj.exponent) );
-                        end
-
-                        resid = norm(residual);
-                        if N_iter == 0
-                            resid_ini = 1 + resid;
-                        end
-
-                        if resid/resid_ini < obj.tol || resid < obj.tol
-                            obj.new_active_set = active_set;
-                            break;
-                        end
-
-                        % Jacobian matrix for local return mapping
-                        for ii = 1 : active_set(n21)
-                            if Gamma(ii) < 0
-                                continue;
-                            end
-                            for jj = 1 : active_set(n21)
-                                % find the No. of slip system in active set
-                                alpha = active_set(ii);
-                                beta = active_set(jj);
-                                tmp_beta = obj.elastic_cto*P_Schmid(:,beta);
-
-                                jacobian(ii,jj) = transpose(P_Schmid(:,alpha)) * tmp_beta ...
-                                    + hardening_moduli(ii,jj)...
-                                    *((obj.viscosity/obj.dt*Gamma(ii)+1)^(1/obj.exponent));
-                                if (ii == jj)
-                                    jacobian(ii,jj) = jacobian(ii,jj) ...
-                                        + obj.new_tau*(obj.viscosity/(obj.exponent*obj.dt))...
-                                        *(((obj.viscosity/obj.dt)*Gamma(ii)+1)^(1/obj.exponent-1));
-                                end
-
-                            end
-                        end
-
-                        % Inverse of Jacobian
-                        [U,S,V] = svd(jacobian);
-                        % Inverse Method I - Pseudo inverse
-                        jacobian_inv = obj.update_jacobian_inverse(S,U,V);
-                        % Newton update: xnew = xcurrent - xdelta, xdelta = jacobian_inv*residual
-                        xdelta = jacobian_inv * residual;
-                        Gamma = Gamma + xdelta;
-                        
-                    end % end of Newton return mapping
-                    
-                    % Update Jacobian inverse
-                    CTO_jacobian_inv = jacobian_inv;
-                    
-                    % Update I: if Gamma_min < 0, drop it and reconstruct the active set
-                    n_active = active_set(n21);
-                    [Gamma_min, drop_slip_system] = min(Gamma(1:n_active));
-                    update_I = ( Gamma_min < 0 );
-                    update_II = ~update_I;
-                    if ( update_I )
-                        active_set(drop_slip_system:n_active-1) = ...
-                            active_set(drop_slip_system+1:n_active);
-                        active_set(n_active) = 0;
-                        active_set(n21) = active_set(n21) - 1;
-                    end
-                    
-                end % end while loop for Update I
-                
-                % update II
-                if update_II
-                    % Find the slip systems not in the active set
-                    check_F = transpose(P_Schmid) * obj.new_stress - obj.new_tau;
-                    n_active = active_set(n21);
-                    temp = active_set(1:n_active);
-                    check_F(temp) = 0;
-                    
-                    % Find the maximum F
-                    [F_max, add_slip_system] = max(check_F);
-                    
-                    % Check the maximum F
-                    update_I = F_max > obj.tol;
-                    if update_I
-                       active_set(n21) = active_set(n21) + 1;
-                       n_active = active_set(n21);
-                       active_set(n_active) = add_slip_system;
-                    else
-                        break;
-                    end
-                end % End Update II
-            end % End active set iteration
+            % Update Jacobian inverse - Pseudo inverse
+            [U,S,V] = svd(jacobian);
+            CTO_jacobian_inv = obj.update_jacobian_inverse(S,U,V);
             
             % Update CTO
             obj.new_cto = obj.elastic_cto;
-            n_active = obj.new_active_set(n21);
-            for ii = 1:n_active
-                for jj = 1:n_active
-                    alpha = obj.new_active_set(ii);
-                    beta  = obj.new_active_set(jj);
-                    tmp_Schmid_a = obj.elastic_cto * P_Schmid(:,alpha);
-                    tmp_Schmid_b = obj.elastic_cto * P_Schmid(:,beta);
+            for ii = 1:nslip
+                for jj = 1:nslip
+                    tmp_Schmid_a = obj.elastic_cto * P_Schmid(:,ii);
+                    tmp_Schmid_b = obj.elastic_cto * P_Schmid(:,jj);
                     obj.new_cto = obj.new_cto - CTO_jacobian_inv(ii,jj) * tmp_Schmid_a * transpose(tmp_Schmid_b);
                 end
             end
@@ -828,6 +674,78 @@ classdef PhaseFieldMultiCrystal < handle
 %             obj.new_strain = obj.new_elastic_strain + obj.new_plastic_strain;
             obj.new_strain = strain_n1;
             obj.update_strain_energy();
+        end
+        
+        function [R,J] = formR(obj, Gamma, P_Schmid)
+            % attention: J = - d(R) / d(gamma)
+            nslip = obj.num_slip_system;
+            J = zeros(nslip, nslip);
+            
+            tmp_plastic_strain = P_Schmid * Gamma;
+            tmp_plastic_slip_i = abs( Gamma );
+            tmp_plastic_slip = sum( tmp_plastic_slip_i );
+            tmp_elastic_strain = obj.new_elastic_strain - tmp_plastic_strain;
+            fd_new_stress         = obj.elastic_cto * tmp_elastic_strain;
+            % Isotropic hardening
+            fd_new_tau = obj.old_tau + obj.hardening*tmp_plastic_slip;
+            % Residual
+%             R = transpose(P_Schmid) * fd_new_stress ...
+%                 - fd_new_tau * ( ( obj.viscosity / obj.dt * abs(Gamma) ).^(1/obj.exponent) ) .* sign(Gamma);
+            tau = transpose(P_Schmid) * fd_new_stress;
+            R = ( abs(tau) ) .^ (obj.exponent) .* sign(tau) ...
+                - (fd_new_tau^(obj.exponent)) * obj.viscosity / obj.dt * Gamma;
+            
+            % Jacobian matrix for local return mapping
+            for ii = 1 : nslip
+                for jj = 1 : nslip
+                    % find the No. of slip system in active set
+                    tmp_beta = obj.elastic_cto*P_Schmid(:,jj);
+
+                    J(ii,jj) = transpose(P_Schmid(:,ii)) * tmp_beta * obj.exponent * (abs(tau(ii))^(obj.exponent-1) )...
+                        + obj.hardening ...
+                        *obj.exponent*fd_new_tau^(obj.exponent-1)*obj.viscosity/obj.dt*Gamma(ii)*sign(Gamma(jj));
+                    if (ii == jj)
+                        J(ii,jj) = J(ii,jj) ...
+                            + fd_new_tau^(obj.exponent)*(obj.viscosity/obj.dt);
+                    end
+
+                end
+            end
+        end
+        
+        function [R,J] = formR_ori(obj, Gamma, P_Schmid)
+            % attention: J = - d(R) / d(gamma)
+            nslip = obj.num_slip_system;
+            J = zeros(nslip, nslip);
+            
+            tmp_plastic_strain = P_Schmid * Gamma;
+            tmp_plastic_slip_i = abs( Gamma );
+            tmp_plastic_slip = sum( tmp_plastic_slip_i );
+            tmp_elastic_strain = obj.new_elastic_strain - tmp_plastic_strain;
+            fd_new_stress         = obj.elastic_cto * tmp_elastic_strain;
+            % Isotropic hardening
+            fd_new_tau = obj.old_tau + obj.hardening*tmp_plastic_slip;
+            % Residual
+            R = transpose(P_Schmid) * fd_new_stress ...
+                - fd_new_tau * ( ( obj.viscosity / obj.dt * abs(Gamma) ).^(1/obj.exponent) ) .* sign(Gamma);
+            
+            % Jacobian matrix for local return mapping
+            for ii = 1 : nslip
+                for jj = 1 : nslip
+                    % find the No. of slip system in active set
+                    tmp_beta = obj.elastic_cto*P_Schmid(:,jj);
+
+                    J(ii,jj) = transpose(P_Schmid(:,ii)) * tmp_beta ...
+                        + obj.hardening ...
+                        *((obj.viscosity/obj.dt*abs(Gamma(ii)))^(1/obj.exponent)) * sign(Gamma(ii)) * sign(Gamma(jj));
+                    if (ii == jj)
+                        J(ii,jj) = J(ii,jj) ...
+                            + obj.new_tau*(obj.viscosity/(obj.exponent*obj.dt))...
+                            *(((obj.viscosity/obj.dt)*abs(Gamma(ii)))^(1/obj.exponent-1));
+                    end
+
+                end
+            end
         end
         
         function euler_matrix = update_R_matrix(obj)
@@ -971,11 +889,12 @@ classdef PhaseFieldMultiCrystal < handle
             s_size = length(S);
             S_inv = zeros(s_size, s_size);
             for ii = 1:s_size
-                if S(ii,ii)/S(1,1) < 1.0e-6
-                    S_inv(ii,ii) = 0;
-                else
-                    S_inv(ii,ii) = 1 / S(ii,ii);
-                end
+%                 if S(ii,ii)/S(1,1) < 1.0e-6
+%                     S_inv(ii,ii) = 0;
+%                 else
+%                     S_inv(ii,ii) = 1 / S(ii,ii);
+%                 end
+                S_inv(ii,ii) = 1 / S(ii,ii);
             end
             jacobian_inv = V * S_inv * transpose(U);
         end
