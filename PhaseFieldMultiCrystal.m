@@ -60,6 +60,7 @@ classdef PhaseFieldMultiCrystal < handle
         
         new_cto; % SymmetricTensor<4,3>
         elastic_cto; % SymmetricTensor<4,3>
+        elastic_cto_damage; % SymmetricTensor<4,3>
         
         % Internal Variables
         new_plastic_slip;
@@ -112,6 +113,15 @@ classdef PhaseFieldMultiCrystal < handle
         svec_t = [1; 0; 0]; % shear direction of twinning plane
         mvec_t = [0; 1; 0]; % normal direction of twinning plane
         Q_t; % rotation matrix of twinning deformation
+        % tangent stiffness
+        dtau_dpft;
+        dtau_dpfc;
+        dH_dpft;
+        dH_dpfc;
+        dH_deps;
+        dtau_deps;
+        dsigma_dpft;
+        dsigma_dpfc;
         
         % slip system
         P_Schmid_notw;
@@ -334,7 +344,6 @@ classdef PhaseFieldMultiCrystal < handle
             six       = 6.0e0;
             twelve    = 12.0e0;
             onemk     = 1 - obj.k_c;
-            obj.g_c   = onemk * (1-pfc) * (1-pfc) + obj.k_c;
             obj.g_c   = onemk * (one - pfc) * (one - pfc) + obj.k_c;
             obj.gp_c  = two * onemk * (pfc - one);
             obj.gpp_c = two * onemk;
@@ -439,7 +448,7 @@ classdef PhaseFieldMultiCrystal < handle
                 obj.Hn1_c = obj.Hn_c;
             end
             
-            obj.new_cto = obj.g_c * obj.new_cto;
+%             obj.new_cto = obj.g_c * obj.new_cto;
         end
         
         function save_state(obj)
@@ -601,6 +610,16 @@ classdef PhaseFieldMultiCrystal < handle
             obj.new_plastic_slip         = obj.old_plastic_slip;
             obj.new_plastic_slip_i       = obj.old_plastic_slip_i;
             obj.new_tau                  = obj.old_tau;
+            eps_tr                       = strain_n1(1) + strain_n1(2) + strain_n1(3);
+            I2                           = [1; 1; 1; 0; 0; 0];
+            I4                           = diag([1, 1, 1, 0.5, 0.5, 0.5]);
+            I2I2                         = I2 * transpose(I2);
+            if eps_tr >= 0
+                obj.elastic_cto_damage   = obj.g_c * obj.elastic_cto;
+            else
+                obj.elastic_cto_damage   = obj.K * I2I2 + ...
+                    obj.g_c * 2 * obj.mu * (I4 - I2I2 / 3);
+            end
             
             prm_R    = 1.986e-3; % Gas constant (kcal/(mol.K))
             obj.viscosity = 1.0/(obj.prm_C*exp((-1.0)*obj.prm_Q/(prm_R*obj.temperature)));
@@ -655,14 +674,14 @@ classdef PhaseFieldMultiCrystal < handle
             CTO_jacobian_inv = obj.update_jacobian_inverse(S,U,V);
             
             % Update CTO
-            taus = transpose( P_Schmid ) * obj.new_stress;
-            obj.new_cto = obj.elastic_cto;
+            tau_s = transpose( P_Schmid ) * obj.new_stress;
+            obj.new_cto = obj.elastic_cto_damage;
             for ii = 1:nslip
                 for jj = 1:nslip
-                    ptaup = obj.exponent * ( abs( taus(jj) ) ) ^ ( obj.exponent - 1 );
+                    ptaup = obj.exponent * ( abs( tau_s(jj) ) ) ^ ( obj.exponent - 1 );
                     tmp_Schmid_a = obj.elastic_cto * P_Schmid(:,ii);
                     tmp_Schmid_b = obj.elastic_cto * P_Schmid(:,jj);
-                    obj.new_cto = obj.new_cto - ptaup * CTO_jacobian_inv(ii,jj) * tmp_Schmid_a * transpose(tmp_Schmid_b);
+                    obj.new_cto = obj.new_cto - obj.g_c * ptaup * CTO_jacobian_inv(ii,jj) * tmp_Schmid_a * transpose(tmp_Schmid_b);
                 end
             end
             
@@ -675,6 +694,9 @@ classdef PhaseFieldMultiCrystal < handle
 %             obj.new_strain = obj.new_elastic_strain + obj.new_plastic_strain;
             obj.new_strain = strain_n1;
             obj.update_strain_energy();
+            
+            % update coupled stiffness
+            obj.update_tan_utc(CTO_jacobian_inv, Gamma);
         end
         
         function [R,J] = formR(obj, Gamma, P_Schmid)
@@ -763,6 +785,58 @@ classdef PhaseFieldMultiCrystal < handle
             
             euler_matrix = phi2_matrix * phi_matrix * phi1_matrix;
         end
+        
+        % update coupled tangent stiffness
+        function update_tan_utc(obj, Dinv, Gamma)
+            
+            % (0) volumetric stress and deviatoric stress
+            I2 = [1; 1; 1; 0; 0; 0];
+            I4 = diag([1, 1, 1, 0.5, 0.5, 0.5]);
+            one_third = 1/3;
+            tr_eps = obj.new_elastic_strain(1) + obj.new_elastic_strain(2) ...
+                + obj.new_elastic_strain(3);
+            tr_eps_plus  = max(0.0, tr_eps);
+            % tr_eps_minus = tr_eps - tr_eps_plus;
+            dev_starin = obj.new_elastic_strain - one_third*tr_eps*I2;
+            new_stress_plus = obj.K* tr_eps_plus*I2 + 2*obj.mu*I4*dev_starin;
+            stress_hat = obj.elastic_cto * obj.new_elastic_strain;
+            % new_stress_minus = obj.K* tr_eps_minus*I2;
+
+            % (1) depends on original data
+            % strain_n1 = obj.new_elastic_strain + obj.new_plastic_strain + obj.strain_twin;
+            strain_tr = obj.new_elastic_strain + obj.new_plastic_strain - obj.old_plastic_strain;
+            P_Schmid = (1-obj.phi_t) * obj.P_Schmid_notw + obj.phi_t * obj.P_Schmid_twin;
+            dP_dpft = obj.phip_t * (obj.P_Schmid_twin - obj.P_Schmid_notw);
+            depst_dpft = obj.gamma0_t * obj.phip_t * obj.sm_t;
+            sslip = obj.new_plastic_slip_i;
+%             tau_s = transpose( P_Schmid ) * obj.new_stress;
+            tau_s = transpose( P_Schmid ) * stress_hat;
+            ptaup = obj.exponent * ( abs( tau_s ) ) .^ ( obj.exponent - 1 );
+
+            % (2) depends on (1)
+            depstr_dpft = - depst_dpft;
+            dgamma_deps = Dinv * ( repmat(ptaup,1,6) .* transpose(P_Schmid) * obj.elastic_cto );
+            dgamma_dpft = Dinv * ( ptaup .* ( ...
+                  transpose(dP_dpft)  * obj.elastic_cto * strain_tr ...
+                + transpose(P_Schmid) * obj.elastic_cto * depstr_dpft ...
+                - transpose(dP_dpft)  * obj.elastic_cto * P_Schmid * Gamma ...
+                - transpose(P_Schmid) * obj.elastic_cto * dP_dpft  * Gamma ) );
+
+            % (3) depends on (2)
+            depsp_dpft = P_Schmid * dgamma_dpft + dP_dpft * Gamma;
+
+            % (4) final results
+            obj.dH_dpft = obj.hardening * transpose(sslip) * ( dgamma_dpft .* sign( Gamma ) ) ...
+                - transpose( stress_hat ) * ( depsp_dpft + depst_dpft );
+            obj.dH_dpfc = 0;
+            obj.dH_deps = new_stress_plus - transpose(dgamma_deps) * transpose(P_Schmid) * new_stress_plus ...
+                + obj.hardening * transpose(dgamma_deps) * ( sslip .* sign( Gamma ) );
+            obj.dsigma_dpft = - obj.g_c * obj.elastic_cto * (depsp_dpft + depst_dpft);
+            obj.dsigma_dpfc = obj.gp_c * new_stress_plus;
+            obj.dtau_dpft = transpose(obj.dsigma_dpft) * obj.sm_t;
+            obj.dtau_dpfc = transpose(obj.dsigma_dpfc) * obj.sm_t;
+            obj.dtau_deps = transpose(obj.new_cto) * obj.sm_t;
+        end
     
         % A whole bunch of 'get' function
         
@@ -811,15 +885,15 @@ classdef PhaseFieldMultiCrystal < handle
         end
         
         function tmp = get_dtau_dpft(obj)
-            tmp = obj.tol;
+            tmp = obj.dtau_dpft;
         end
         
         function tmp = get_dtau_dpfc(obj)
-            tmp = obj.tol;
+            tmp = obj.dtau_dpfc;
         end
         
         function tmp = get_dH_dpft(obj)
-            tmp = obj.tol;
+            tmp = obj.dH_dpft;
         end
         
         function tmp = get_Hn1_c(obj)
@@ -827,23 +901,23 @@ classdef PhaseFieldMultiCrystal < handle
         end
         
         function tmp = get_dH_dpfc(obj)
-            tmp = obj.tol;
+            tmp = obj.dH_dpfc;
         end
         
         function tmp = get_dH_deps(obj)
-            tmp = obj.tol;
+            tmp = obj.dH_deps;
         end
         
         function tmp = get_dtau_deps(obj)
-            tmp = obj.tol;
+            tmp = obj.dtau_deps;
         end
         
         function tmp = get_dsigma_dpft(obj)
-            tmp = obj.tol;
+            tmp = obj.dsigma_dpft;
         end
         
         function tmp = get_dsigma_dpfc(obj)
-            tmp = obj.tol;
+            tmp = obj.dsigma_dpfc;
         end
         
     end
