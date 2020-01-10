@@ -123,6 +123,10 @@ classdef PhaseFieldMultiCrystal < handle
         dsigma_dpft;
         dsigma_dpfc;
         
+        % temporary variable to perform initial guess
+        % for local stress integration
+        dgamma_deps;
+        
         % slip system
         P_Schmid_notw;
         P_Schmid_twin;
@@ -305,6 +309,10 @@ classdef PhaseFieldMultiCrystal < handle
             obj.new_plastic_strain = zeros(6,1);
             obj.old_plastic_strain = zeros(6,1);
             obj.new_cto = obj.elastic_cto;
+            
+            % temporary variable to perform initial guess
+            % for local stress integration
+            obj.dgamma_deps = zeros(obj.num_slip_system, 6);
             
             obj.update_slip_plane();
             obj.save_state();
@@ -553,30 +561,6 @@ classdef PhaseFieldMultiCrystal < handle
             plsl = obj.old_plastic_slip;
         end
         
-        function plsl = plastic_slip_new_0(obj)
-            plsl = obj.new_plastic_slip_i(1);
-        end
-        
-        function plsl = plastic_slip_new_1(obj)
-            plsl = obj.new_plastic_slip_i(2);
-        end
-        
-        function plsl = plastic_slip_new_2(obj)
-            plsl = obj.new_plastic_slip_i(3);
-        end
-        
-        function plsl = plastic_slip_new_3(obj)
-            plsl = obj.new_plastic_slip_i(4);
-        end
-        
-        function plsl = plastic_slip_new_4(obj)
-            plsl = obj.new_plastic_slip_i(5);
-        end
-        
-        function plsl = plastic_slip_new_5(obj)
-            plsl = obj.new_plastic_slip_i(6);
-        end
-        
         % Energy dissipation
         function temp = old_plastic_dissipation(obj)
             old_plastic_slip_rate = obj.old_plastic_slip - obj.old_old_plastic_slip;
@@ -602,6 +586,7 @@ classdef PhaseFieldMultiCrystal < handle
         function run_3D_update(obj,strain_n1)
             % Compute a trial state in which the increment is assumed to be fully elastic
 %             obj.new_elastic_strain       = obj.old_elastic_strain + incr_strain;
+            mxit = 30;
             obj.new_elastic_strain       = strain_n1 - obj.old_plastic_strain - obj.strain_twin;
             obj.new_cto                  = obj.elastic_cto;
             obj.new_stress               = obj.new_cto*obj.new_elastic_strain;
@@ -629,17 +614,7 @@ classdef PhaseFieldMultiCrystal < handle
             P_Schmid = (1-obj.phi_t) * obj.P_Schmid_notw + obj.phi_t * obj.P_Schmid_twin;
             
             % preprocessing for initial guess
-            Gamma0  = zeros(nslip, 1);
-            pre_iter = 10;
-            tau_s = transpose(P_Schmid) * obj.elastic_cto * obj.new_elastic_strain ...
-                - transpose(P_Schmid) * obj.elastic_cto * P_Schmid * Gamma0;
-            tau_s = tau_s / pre_iter;
-            dt_pre = obj.dt / pre_iter;
-            for ii = 1:pre_iter
-                tau_y  = obj.old_tau + obj.hardening*sum( abs( Gamma0 ) );
-                dGamma0 = dt_pre / obj.viscosity * (abs(tau_s)*ii/tau_y).^(obj.exponent) .* sign(tau_s);
-                Gamma0 = Gamma0 + dGamma0;
-            end
+            Gamma0 = obj.dgamma_deps * ( strain_n1 - obj.old_strain );
 
             % actural Newton iteration
             [resid, jacobian] = obj.formR(Gamma0, P_Schmid);
@@ -648,14 +623,19 @@ classdef PhaseFieldMultiCrystal < handle
             resid_r = resid_a / resid_ini;
             Gamma = Gamma0;
             N_iter = 0;
-            while resid_r > 1.0e-10 && resid_a > 1.0e-20 && N_iter < 20
-                Gamma = Gamma + jacobian \ resid;
+            while resid_r > 1.0e-10 && resid_a > 1.0e-20 && N_iter < mxit
+%                 Gamma = Gamma + jacobian \ resid;
+                [U,S,V] = svd(jacobian);
+                jacobian_inv = obj.update_jacobian_inverse(S,U,V);
+                Gamma = Gamma + jacobian_inv * resid;
+                % delete
                 [resid, jacobian] = obj.formR(Gamma, P_Schmid);
                 resid_a = norm(resid);
                 resid_r = resid_a / resid_ini;
                 N_iter = N_iter + 1;
             end
-            if N_iter == 20
+            fprintf('NR iterations: %i\n', N_iter);
+            if N_iter == mxit
                 error('>>> Error: material model fails to converge!');
             end
             
@@ -815,7 +795,7 @@ classdef PhaseFieldMultiCrystal < handle
 
             % (2) depends on (1)
             depstr_dpft = - depst_dpft;
-            dgamma_deps = Dinv * ( repmat(ptaup,1,6) .* transpose(P_Schmid) * obj.elastic_cto );
+            obj.dgamma_deps = Dinv * ( repmat(ptaup,1,6) .* transpose(P_Schmid) * obj.elastic_cto );
             dgamma_dpft = Dinv * ( ptaup .* ( ...
                   transpose(dP_dpft)  * obj.elastic_cto * strain_tr ...
                 + transpose(P_Schmid) * obj.elastic_cto * depstr_dpft ...
@@ -827,10 +807,10 @@ classdef PhaseFieldMultiCrystal < handle
 
             % (4) final results
             obj.dH_dpft = obj.hardening * transpose(sslip) * ( dgamma_dpft .* sign( Gamma ) ) ...
-                - transpose( stress_hat ) * ( depsp_dpft + depst_dpft );
+                - transpose( new_stress_plus ) * ( depsp_dpft + depst_dpft );
             obj.dH_dpfc = 0;
-            obj.dH_deps = new_stress_plus - transpose(dgamma_deps) * transpose(P_Schmid) * new_stress_plus ...
-                + obj.hardening * transpose(dgamma_deps) * ( sslip .* sign( Gamma ) );
+            obj.dH_deps = new_stress_plus - transpose(obj.dgamma_deps) * transpose(P_Schmid) * new_stress_plus ...
+                + obj.hardening * transpose(obj.dgamma_deps) * ( sslip .* sign( Gamma ) );
             obj.dsigma_dpft = - obj.g_c * obj.elastic_cto * (depsp_dpft + depst_dpft);
             obj.dsigma_dpfc = obj.gp_c * new_stress_plus;
             obj.dtau_dpft = transpose(obj.dsigma_dpft) * obj.sm_t;
