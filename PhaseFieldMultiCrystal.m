@@ -51,6 +51,7 @@ classdef PhaseFieldMultiCrystal < handle
         new_elastic_strain; % SymmetricTensor<2,3>
         old_elastic_strain; % SymmetricTensor<2,3>
         old_old_elastic_strain; % SymmetricTensor<2,3>
+        elastic_strain_tr; % SymmetricTensor<2,3>
         
         new_plastic_strain; % SymmetricTensor<2,3>
         old_plastic_strain; % SymmetricTensor<2,3>
@@ -108,7 +109,8 @@ classdef PhaseFieldMultiCrystal < handle
         phip_t; % 1st order derivative of representative function
         phipp_t; % 2nd order derivative of representative function
         sm_t; % twinning strain mode
-        strain_twin; % twinning strain
+        strain_twin_n1; % twinning strain of current step
+        strain_twin_n;  % twinning strain of previous step
         tau_t; % shear stress on the twinning plane
         svec_t = [1; 0; 0]; % shear direction of twinning plane
         mvec_t = [0; 1; 0]; % normal direction of twinning plane
@@ -242,18 +244,21 @@ classdef PhaseFieldMultiCrystal < handle
         
         function initialize(obj)
             % Parse Parameters
-            obj.K = 25; % bulk modulus
-            obj.nu = 0.25; % poisson ratio
-            obj.tau_ini = 5.0e-3; % critical resolved shear stress
-            obj.hardening = 0.1; % hardening parameter
+            obj.K = 36.7e3; % bulk modulus
+            obj.nu = 0.276; % poisson ratio
+            obj.tau_ini = 3; % critical resolved shear stress
+            obj.hardening = 100; % hardening parameter
             obj.prm_Q = 14; % activation energy
             obj.prm_C = 1.0; % shape factor
             obj.exponent = 10.0;
 %             obj.Euler_Theta = 10.0 * pi / 180;
 %             obj.Euler_Phi = 30.0 * pi / 180;
-            obj.Euler_phi1 = 30.0 * pi / 180;
-            obj.Euler_phi  = 50.0 * pi / 180;
-            obj.Euler_phi2 = 10.0 * pi / 180;
+%             obj.Euler_phi1 = 30.0 * pi / 180;
+%             obj.Euler_phi  = 50.0 * pi / 180;
+%             obj.Euler_phi2 = 10.0 * pi / 180;
+            obj.Euler_phi1 = 0;
+            obj.Euler_phi  = 0;
+            obj.Euler_phi2 = 0;
             obj.verbose = 0;
             
             % Elastic Tangent Operator
@@ -273,11 +278,12 @@ classdef PhaseFieldMultiCrystal < handle
             obj.new_plastic_slip_i       = zeros(obj.num_slip_system, 1);
             obj.old_plastic_slip_i       = zeros(obj.num_slip_system, 1);
             obj.old_old_plastic_slip_i   = zeros(obj.num_slip_system, 1);
+            obj.old_tau                  = obj.tau_ini;
             obj.new_tau                  = obj.tau_ini;
             
             % phase field fracture
-            obj.Gc_c  = 1.15e-6;
-            obj.l0_c  = 0.02;
+            obj.Gc_c  = 115000;
+            obj.l0_c  = 1.0e-6;
             obj.k_c   = 1e-3;
             obj.Hn_c  = 0;
             obj.Hn1_c = 0;
@@ -296,7 +302,8 @@ classdef PhaseFieldMultiCrystal < handle
             obj.phip_t      = 0;
             obj.phipp_t     = 0;
             obj.sm_t        = zeros(6,1);
-            obj.strain_twin = zeros(6,1);
+            obj.strain_twin_n1 = zeros(6,1);
+            obj.strain_twin_n  = zeros(6,1);
             
             % extra initiation for tensor variables
             obj.new_stress = zeros(6,1);
@@ -306,6 +313,7 @@ classdef PhaseFieldMultiCrystal < handle
             obj.new_elastic_strain = zeros(6,1);
             obj.old_elastic_strain = zeros(6,1);
             obj.old_old_elastic_strain = zeros(6,1);
+            obj.elastic_strain_tr = zeros(6,1);
             obj.new_plastic_strain = zeros(6,1);
             obj.old_plastic_strain = zeros(6,1);
             obj.new_cto = obj.elastic_cto;
@@ -366,7 +374,7 @@ classdef PhaseFieldMultiCrystal < handle
             obj.phi_t   = a1*pft2 + two*a2*pft3 + a3*pft4;
             obj.phip_t  = two*a1*pft + six*a2*pft2 + four*a3*pft3;
             obj.phipp_t = two*a1 + twelve*a2*pft + twelve*a3*pft2;
-            obj.strain_twin = obj.gamma0_t * obj.phi_t * obj.sm_t;
+            obj.strain_twin_n1 = obj.gamma0_t * obj.phi_t * obj.sm_t;
         end
         
         function update_slip_plane(obj)
@@ -477,6 +485,8 @@ classdef PhaseFieldMultiCrystal < handle
             obj.old_plastic_slip_i       = obj.new_plastic_slip_i;
             % Driving force
             obj.Hn_c                     = obj.Hn1_c;
+            % twinning strain
+            obj.strain_twin_n            = obj.strain_twin_n1;
         end
         
         function recover_state(obj)
@@ -497,6 +507,8 @@ classdef PhaseFieldMultiCrystal < handle
             obj.old_plastic_slip_i       = obj.old_old_plastic_slip_i;
             % Driving force
             obj.Hn1_c                    = obj.Hn_c;
+            % twinning strain
+            obj.strain_twin_n1           = obj.strain_twin_n;
         end
         
         function sigma = stress(obj)
@@ -587,9 +599,9 @@ classdef PhaseFieldMultiCrystal < handle
             % Compute a trial state in which the increment is assumed to be fully elastic
 %             obj.new_elastic_strain       = obj.old_elastic_strain + incr_strain;
             mxit = 30;
-            obj.new_elastic_strain       = strain_n1 - obj.old_plastic_strain - obj.strain_twin;
+            obj.elastic_strain_tr        = strain_n1 - obj.old_plastic_strain - obj.strain_twin_n1;
             obj.new_cto                  = obj.elastic_cto;
-            obj.new_stress               = obj.new_cto*obj.new_elastic_strain;
+            obj.new_stress               = obj.new_cto*obj.elastic_strain_tr;
             obj.new_plastic_strain       = obj.old_plastic_strain;
             obj.new_equiv_plastic_strain = obj.old_equiv_plastic_strain;
             obj.new_plastic_slip         = obj.old_plastic_slip;
@@ -613,10 +625,19 @@ classdef PhaseFieldMultiCrystal < handle
             nslip = obj.num_slip_system;
             P_Schmid = (1-obj.phi_t) * obj.P_Schmid_notw + obj.phi_t * obj.P_Schmid_twin;
             
-            % preprocessing for initial guess
-            Gamma0 = obj.dgamma_deps * ( strain_n1 - obj.old_strain );
+            %% preprocessing for initial guess
+            Gamma0 = zeros(nslip, 1);
+            [resid, jacobian] = obj.formR(Gamma0, P_Schmid);
+            Gamma0 = jacobian \ resid;
+            obj.new_elastic_strain = obj.elastic_strain_tr - P_Schmid * Gamma0;
+            % Update Jacobian inverse - Pseudo inverse
+            [U,S,V] = svd(jacobian);
+            CTO_jacobian_inv = obj.update_jacobian_inverse(S,U,V);
+            % Update variables
+            obj.update_tan_utc(CTO_jacobian_inv, Gamma0);
+            Gamma0 = obj.dgamma_deps * ( strain_n1 - obj.old_strain - obj.strain_twin_n1 + obj.strain_twin_n );
 
-            % actural Newton iteration
+            %% actural Newton iteration
             [resid, jacobian] = obj.formR(Gamma0, P_Schmid);
             resid_ini = norm(resid);
             resid_a = resid_ini;
@@ -624,10 +645,10 @@ classdef PhaseFieldMultiCrystal < handle
             Gamma = Gamma0;
             N_iter = 0;
             while resid_r > 1.0e-10 && resid_a > 1.0e-20 && N_iter < mxit
-%                 Gamma = Gamma + jacobian \ resid;
-                [U,S,V] = svd(jacobian);
-                jacobian_inv = obj.update_jacobian_inverse(S,U,V);
-                Gamma = Gamma + jacobian_inv * resid;
+                Gamma = Gamma + jacobian \ resid;
+%                 [U,S,V] = svd(jacobian);
+%                 jacobian_inv = obj.update_jacobian_inverse(S,U,V);
+%                 Gamma = Gamma + jacobian_inv * resid;
                 % delete
                 [resid, jacobian] = obj.formR(Gamma, P_Schmid);
                 resid_a = norm(resid);
@@ -643,7 +664,7 @@ classdef PhaseFieldMultiCrystal < handle
             tmp_plastic_strain = P_Schmid * Gamma;
             tmp_plastic_slip_i = abs( Gamma );
             tmp_plastic_slip = sum( tmp_plastic_slip_i );
-            tmp_elastic_strain = obj.new_elastic_strain - tmp_plastic_strain;
+            tmp_elastic_strain = obj.elastic_strain_tr - tmp_plastic_strain;
             obj.new_plastic_slip   = obj.old_plastic_slip   + tmp_plastic_slip;
             obj.new_plastic_slip_i = obj.old_plastic_slip_i + tmp_plastic_slip_i;
             obj.new_stress         = obj.elastic_cto * tmp_elastic_strain;
@@ -688,7 +709,7 @@ classdef PhaseFieldMultiCrystal < handle
             tmp_plastic_strain = P_Schmid * Gamma;
             tmp_plastic_slip_i = abs( Gamma );
             tmp_plastic_slip = sum( tmp_plastic_slip_i );
-            tmp_elastic_strain = obj.new_elastic_strain - tmp_plastic_strain;
+            tmp_elastic_strain = obj.elastic_strain_tr - tmp_plastic_strain;
             fd_new_stress         = obj.elastic_cto * tmp_elastic_strain;
             % Isotropic hardening
             fd_new_tau = obj.old_tau + obj.hardening*tmp_plastic_slip;
@@ -783,8 +804,9 @@ classdef PhaseFieldMultiCrystal < handle
             % new_stress_minus = obj.K* tr_eps_minus*I2;
 
             % (1) depends on original data
-            % strain_n1 = obj.new_elastic_strain + obj.new_plastic_strain + obj.strain_twin;
-            strain_tr = obj.new_elastic_strain + obj.new_plastic_strain - obj.old_plastic_strain;
+            % strain_n1 = obj.new_elastic_strain + obj.new_plastic_strain + obj.strain_twin_n1;
+%             strain_tr = obj.new_elastic_strain + obj.new_plastic_strain - obj.old_plastic_strain;
+            strain_tr = obj.elastic_strain_tr;
             P_Schmid = (1-obj.phi_t) * obj.P_Schmid_notw + obj.phi_t * obj.P_Schmid_twin;
             dP_dpft = obj.phip_t * (obj.P_Schmid_twin - obj.P_Schmid_notw);
             depst_dpft = obj.gamma0_t * obj.phip_t * obj.sm_t;
