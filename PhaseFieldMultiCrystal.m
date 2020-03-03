@@ -87,6 +87,7 @@ classdef PhaseFieldMultiCrystal < handle
         % Yield stress
         new_tau;
         old_tau;
+        hard_ratio;
         
         % phase field fracture
         Gc_c;
@@ -141,7 +142,7 @@ classdef PhaseFieldMultiCrystal < handle
         % constructor without default input value
         function obj = PhaseFieldMultiCrystal(s_type)
             obj.slip_type = s_type;
-            if s_type == 0
+            if s_type == 0 % rock salt
                 obj.num_slip_system = 6;
                 obj.slip_normal = [ 1.0, 1.0, 0.0;
                     1.0,-1.0, 0.0;
@@ -155,7 +156,8 @@ classdef PhaseFieldMultiCrystal < handle
                     1.0, 0.0, 1.0;
                     0.0, 1.0,-1.0;
                     0.0, 1.0, 1.0];
-            elseif s_type == 1
+                obj.hard_ratio = ones(obj.num_slip_system, 1);
+            elseif s_type == 1 % FCC
                 obj.num_slip_system = 12;
                 obj.slip_normal = zeros(obj.num_slip_system, 3);
                 obj.slip_direct = zeros(obj.num_slip_system, 3);
@@ -235,8 +237,27 @@ classdef PhaseFieldMultiCrystal < handle
                 obj.slip_normal(12,1)=f;
                 obj.slip_normal(12,2)=-f;
                 obj.slip_normal(12,3)=f;
-            elseif s_type == 2
-                error('>>> Error: HMX slip system is not implemented yet!');
+                obj.hard_ratio = ones(obj.num_slip_system, 1);
+            elseif s_type == 2 % beta HMX
+                obj.num_slip_system = 6;
+                obj.slip_normal = [0, 0, 1;
+                    0, 0.5911, 0.8066;
+                    0, 0.5911, 0.8066;
+                    0, 0.344, 0.939;
+                    0.7, 0, 0.7141;
+                    0.7, 0, 0.7141];
+                obj.slip_direct = [1, 0, 0;
+                    0.0881, 0.8035, -0.5888;
+                    1, 0, 0;
+                    1, 0, 0;
+                    0.7141, 0, -0.7;
+                    0, 1, 0];
+                obj.hard_ratio(1) = 1.0;
+                obj.hard_ratio(2) = 1.0;
+                obj.hard_ratio(3) = 1.0;
+                obj.hard_ratio(4) = 1.0;
+                obj.hard_ratio(5) = 1.0;
+                obj.hard_ratio(6) = 1.0;
             else
                 error('>>> Error: Unknown slip type!');
             end
@@ -287,9 +308,9 @@ classdef PhaseFieldMultiCrystal < handle
             obj.k_c   = 1e-3;
             obj.Hn_c  = 0;
             obj.Hn1_c = 0;
-            obj.g_c   = 0;
-            obj.gp_c  = 0;
-            obj.gpp_c = 0;
+            obj.g_c   = 1;
+            obj.gp_c  = 2 * ( obj.k_c - 1 );
+            obj.gpp_c = 2 * ( 1 - obj.k_c );
             
             % phase field twinning
             obj.Gc_t        = 1.17e-4; % mJ/(mm^2)
@@ -300,7 +321,7 @@ classdef PhaseFieldMultiCrystal < handle
             obj.k_t         = 0.75 * obj.Gc_t * obj.l0_t;
             obj.phi_t       = 0;
             obj.phip_t      = 0;
-            obj.phipp_t     = 0;
+            obj.phipp_t     = 2 * obj.alpha_t;
             obj.sm_t        = zeros(6,1);
             obj.strain_twin_n1 = zeros(6,1);
             obj.strain_twin_n  = zeros(6,1);
@@ -655,6 +676,7 @@ classdef PhaseFieldMultiCrystal < handle
                 resid_r = resid_a / resid_ini;
                 N_iter = N_iter + 1;
             end
+            
             fprintf('NR iterations: %i\n', N_iter);
             if N_iter == mxit
                 error('>>> Error: material model fails to converge!');
@@ -704,7 +726,6 @@ classdef PhaseFieldMultiCrystal < handle
             % attention: J = - d(R) / d(gamma)
             % verified against finite difference
             nslip = obj.num_slip_system;
-            J = zeros(nslip, nslip);
             
             tmp_plastic_strain = P_Schmid * Gamma;
             tmp_plastic_slip_i = abs( Gamma );
@@ -712,23 +733,29 @@ classdef PhaseFieldMultiCrystal < handle
             tmp_elastic_strain = obj.elastic_strain_tr - tmp_plastic_strain;
             fd_new_stress         = obj.elastic_cto * tmp_elastic_strain;
             % Isotropic hardening
-            fd_new_tau = obj.old_tau + obj.hardening*tmp_plastic_slip;
+%             fd_new_tau = obj.old_tau + obj.hardening*tmp_plastic_slip;
+            fd_new_tau = ( obj.old_tau + obj.hardening*tmp_plastic_slip ) * obj.hard_ratio;
+            
             % Residual
             tau = transpose(P_Schmid) * fd_new_stress;
-            R = ( abs(tau) ) .^ (obj.exponent) .* sign(tau) ...
-                - (fd_new_tau^(obj.exponent)) * obj.viscosity / obj.dt * Gamma;
+%             R = ( abs(tau) ) .^ (obj.exponent) .* sign(tau) ...
+%                 - obj.viscosity / obj.dt * (fd_new_tau^(obj.exponent)) .* Gamma;
             
             % Jacobian matrix for local return mapping
+            R = zeros(nslip,1);
+            J = zeros(nslip, nslip);
             for ii = 1 : nslip
+                R(ii) = ( abs(tau(ii)) ) ^ (obj.exponent) * sign(tau(ii)) ...
+                      - obj.viscosity / obj.dt * ( fd_new_tau(ii)^(obj.exponent) ) * Gamma(ii);
                 for jj = 1 : nslip
                     tmp_beta = obj.elastic_cto*P_Schmid(:,jj);
 
                     J(ii,jj) = transpose(P_Schmid(:,ii)) * tmp_beta * obj.exponent * (abs(tau(ii))^(obj.exponent-1) )...
-                        + obj.hardening ...
-                        *obj.exponent*fd_new_tau^(obj.exponent-1)*obj.viscosity/obj.dt*Gamma(ii)*sign(Gamma(jj));
+                        + obj.hard_ratio(ii) * obj.hardening ...
+                        *obj.exponent*fd_new_tau(ii)^(obj.exponent-1)*obj.viscosity/obj.dt*Gamma(ii)*sign(Gamma(jj));
                     if (ii == jj)
                         J(ii,jj) = J(ii,jj) ...
-                            + fd_new_tau^(obj.exponent)*(obj.viscosity/obj.dt);
+                            + fd_new_tau(ii)^(obj.exponent)*(obj.viscosity/obj.dt);
                     end
 
                 end
