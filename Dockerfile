@@ -1,0 +1,48 @@
+# Deal.ii Dockerfile for development
+#
+# ATTENTION: this approach does NOT work for all users on Euler
+#            the reason is unknown
+#
+FROM dealii/dealii:latest
+
+ENV DEBIAN_FRONTEND noninteractive
+CMD /bin/bash
+
+USER root
+# This installs Python 3.6.9 by default. Once the
+# docker image is upgraded to Ubuntu 20.04 this will
+# install Python 3.8 by default
+RUN apt-get update && \
+    apt-get install -y software-properties-common \
+                       python3-pip \
+                       libtinfo-dev \
+                       libx11-dev \
+                       libxrandr-dev \
+                       libxinerama-dev \
+                       libxcursor-dev \
+                       libxi-dev \
+                       libglu1-mesa-dev \
+                       freeglut3-dev \
+                       mesa-common-dev \
+                       libtinfo5 \
+                       build-essential \
+                       libssl-dev \
+                       vim
+
+# add and enable the default user
+# ARG USER2=rm3681
+# RUN useradd -ms /bin/bash $USER2
+ARG USER2=rm3681
+ARG UID=1001
+ARG GID=1001
+RUN groupadd -g $GID -o $USER2
+RUN useradd -m -u $UID -g $GID -s /bin/bash $USER2
+
+# Add Docker specific ENV
+#make sure everything is in place
+USER $USER2
+ENV HOME /home/$USER2
+ENV USER $USER2
+ENV DEAL_II_DIR="/usr/src/dealii/include"
+ENV GEOCENTRIC_DIR="/home/rm3681/Program/geocentric/shared"
+WORKDIR $HOME
