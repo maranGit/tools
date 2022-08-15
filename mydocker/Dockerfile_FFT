@@ -1,9 +1,7 @@
-# Deal.ii Dockerfile for development
 #
-# ATTENTION: this approach does NOT work for all users on Euler
-#            the reason is unknown
+# FFT Dockerfile for development
 #
-FROM dealii/dealii:latest
+FROM intel/oneapi-hpckit:latest
 
 ENV DEBIAN_FRONTEND noninteractive
 CMD /bin/bash
@@ -27,14 +25,15 @@ RUN apt-get update && \
                        libtinfo5 \
                        build-essential \
                        libssl-dev \
+                       libeigen3-dev \
                        vim
 
 # add and enable the default user
 # ARG USER2=rm3681
 # RUN useradd -ms /bin/bash $USER2
 ARG USER2=rm3681
-ARG UID=1001
-ARG GID=1001
+ARG UID=1006
+ARG GID=1006
 RUN groupadd -g $GID -o $USER2
 RUN useradd -m -u $UID -g $GID -s /bin/bash $USER2
 
@@ -43,6 +42,4 @@ RUN useradd -m -u $UID -g $GID -s /bin/bash $USER2
 USER $USER2
 ENV HOME /home/$USER2
 ENV USER $USER2
-ENV DEAL_II_DIR="/usr/src/dealii/include"
-ENV GEOCENTRIC_DIR="/home/rm3681/Program/geocentric/shared"
 WORKDIR $HOME
